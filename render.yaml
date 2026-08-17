@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: amor-por-fotos
+    runtime: node
+    buildCommand: npm ci --ignore-scripts && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/settings
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATABASE_URL
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_PUBLIC_URL
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: ADMIN_PIN
+        sync: false
+      - key: DATA_DIR
+        value: /var/data/state
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+    disk:
+      name: amor-por-fotos-data
+      mountPath: /var/data
+      sizeGB: 1
