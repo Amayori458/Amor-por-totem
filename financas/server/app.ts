@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import crypto from "node:crypto";
-import { db, ensureSchema } from "./db.ts";
-import { ACCOUNTS, EXPENSE_CATEGORIES, INCOME_CATEGORIES, parseAmountCents, parseNotifications, type Parsed } from "./parser.ts";
+import { db, ensureSchema } from "./db.js";
+import { ACCOUNTS, EXPENSE_CATEGORIES, INCOME_CATEGORIES, parseAmountCents, parseNotifications, type Parsed } from "./parser.js";
 
 const TZ = "America/Sao_Paulo";
 const COOKIE = "fin_session";

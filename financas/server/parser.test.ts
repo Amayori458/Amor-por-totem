@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAmountCents, parseNotifications } from "./parser.ts";
+import { parseAmountCents, parseNotifications } from "./parser.js";
 
 const one = (text: string, hints = {}) => {
   const r = parseNotifications(text, hints);
