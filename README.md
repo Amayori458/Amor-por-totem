@@ -28,3 +28,7 @@ Fotos são guardadas em `uploads/` e sessões, pedidos e configurações em `dat
 ## Validação
 
 `node_modules/.bin/tsc.cmd --noEmit` concluiu sem erros neste ambiente. A execução do Vite/esbuild foi bloqueada pelo sandbox do ambiente (`spawn EPERM`), não por um erro de código.
+
+## Finanças (projeto separado)
+
+A pasta [`financas/`](financas/README.md) contém um app pessoal de gestão financeira, independente do totem.
