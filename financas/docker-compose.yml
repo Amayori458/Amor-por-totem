@@ -1,0 +1,54 @@
+# App de finanças no seu servidor: banco local + app + endereço HTTPS público (Tailscale Funnel).
+# Use ./instalar.sh para gerar o .env e subir tudo.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: financas
+      POSTGRES_DB: financas
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U financas -d financas"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Dá ao app um endereço https://financas.<sua-rede>.ts.net acessível de qualquer lugar,
+  # sem domínio próprio e sem abrir portas no roteador.
+  tailscale:
+    image: tailscale/tailscale:stable
+    restart: unless-stopped
+    hostname: financas
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: financas
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./deploy/serve.json:/config/serve.json:ro
+    ports:
+      - "127.0.0.1:${PORTA_LOCAL:-3002}:3002" # acesso direto no próprio servidor, para testes
+
+  app:
+    build: .
+    restart: unless-stopped
+    network_mode: service:tailscale # o túnel entrega as requisições em 127.0.0.1:3002
+    depends_on:
+      db:
+        condition: service_healthy
+      tailscale:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://financas:${POSTGRES_PASSWORD}@db:5432/financas
+      DATABASE_SSL: "off"
+      APP_PASSWORD: ${APP_PASSWORD:?defina no .env}
+      INGEST_TOKEN: ${INGEST_TOKEN:?defina no .env}
+
+volumes:
+  db-data:
+  ts-state:

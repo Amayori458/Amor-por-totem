@@ -39,15 +39,40 @@ npm test                                            # testes do leitor de notifi
 
 As tabelas são criadas automaticamente na primeira requisição.
 
-## Publicar (para usar no iPhone)
+## Instalar no seu servidor (Docker)
 
-O iPhone precisa alcançar o app por HTTPS. Sugestão: **Vercel** (app + API) com Postgres do **Supabase**.
+O `docker-compose.yml` sobe três serviços: o app, um Postgres local (os dados ficam no servidor) e o Tailscale, que dá um endereço HTTPS público do tipo `https://financas.<sua-rede>.ts.net` — sem domínio próprio e sem abrir portas no roteador.
 
-1. Na Vercel, importe este repositório com **Root Directory = `financas`**.
-2. Defina as variáveis `DATABASE_URL` (connection string “Transaction pooler” do Supabase), `APP_PASSWORD` e `INGEST_TOKEN` (valor longo e aleatório).
-3. Abra o endereço no Safari → Compartilhar → **Adicionar à Tela de Início** e siga a aba **Automação**.
+**Uma vez, no site do Tailscale** (conta gratuita em https://login.tailscale.com):
 
-Também roda em qualquer host Node (`npm run build && npm start`).
+1. **DNS** → ative **MagicDNS** e **HTTPS Certificates**.
+2. **Access controls** → adicione ao arquivo de políticas: `"nodeAttrs": [{ "target": ["autogroup:member"], "attr": ["funnel"] }]`.
+3. **Settings → Keys** → **Generate auth key** e copie a chave (`tskey-auth-...`).
+
+**No servidor:**
+
+```bash
+git clone https://github.com/Amayori458/Amor-por-totem.git
+cd Amor-por-totem/financas
+./instalar.sh        # pede a chave do Tailscale, gera as senhas no .env e sobe tudo
+docker compose exec tailscale tailscale funnel status   # mostra o endereço https público
+```
+
+O script mostra a senha de entrada do app. Abra o endereço `https://…ts.net` no Safari do iPhone → Compartilhar → **Adicionar à Tela de Início**, e siga a aba **Automação**.
+
+| Tarefa | Comando |
+|---|---|
+| Atualizar | `git pull && ./instalar.sh` |
+| Ver logs | `docker compose logs -f app` |
+| Backup | `docker compose exec db pg_dump -U financas financas > backup.sql` |
+| Restaurar | `docker compose exec -T db psql -U financas financas < backup.sql` |
+| Ver senha e token | `cat .env` |
+
+Sem chave do Tailscale o app funciona só no próprio servidor (`http://localhost:3002`).
+
+### Alternativa: Vercel + Supabase
+
+Importe o repositório na Vercel com **Root Directory = `financas`** e defina `DATABASE_URL` (connection string “Transaction pooler” do Supabase), `APP_PASSWORD` e `INGEST_TOKEN`.
 
 ## Segurança
 

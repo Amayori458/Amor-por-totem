@@ -28,8 +28,9 @@ export function db(): pg.Pool {
   if (!pool) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL não configurada");
-    const local = /localhost|127\.0\.0\.1|\/var\/run/.test(url);
-    pool = new pg.Pool({ connectionString: url, max: 3, ssl: local ? undefined : { rejectUnauthorized: false } });
+    // Banco na mesma máquina/rede Docker não usa TLS; bancos hospedados (Supabase etc.) usam.
+    const noSsl = process.env.DATABASE_SSL === "off" || /localhost|127\.0\.0\.1|\/var\/run/.test(url);
+    pool = new pg.Pool({ connectionString: url, max: 3, ssl: noSsl ? undefined : { rejectUnauthorized: false } });
   }
   return pool;
 }
