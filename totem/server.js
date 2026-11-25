@@ -46,15 +46,16 @@ const PADRAO = {
   loja: 'Amor por Fotos',
   chamada: 'Revele suas fotos na hora',
   mensagemFinal: 'Retire suas fotos na impressora. Obrigado pelo carinho!',
-  // Tamanhos da Fujifilm ASK-400 (300 dpi). Rolo de 6": 10x15, 15x15, 15x20. Rolo de 5": 9x13, 13x13, 13x18.
-  // Ative no painel apenas os que o papel carregado na impressora consegue fazer.
+  // Todos os tamanhos da Fujifilm ASK-400 (300 dpi) já vêm ativos; o primeiro é o tamanho inicial das fotos.
+  // Rolo de 6": 10x15, 15x20, 15x15. Rolo de 5": 13x18, 13x13, 9x13.
+  // Desative no painel os que o papel carregado na impressora não consegue fazer.
   formatos: [
     { id: '10x15', nome: '10x15', largura: 102, altura: 152, preco: 0, ativo: true },
-    { id: '15x20', nome: '15x20', largura: 152, altura: 203, preco: 0, ativo: false },
-    { id: '15x15', nome: '15x15', largura: 152, altura: 152, preco: 0, ativo: false },
-    { id: '13x18', nome: '13x18', largura: 127, altura: 178, preco: 0, ativo: false },
-    { id: '9x13', nome: '9x13', largura: 89, altura: 127, preco: 0, ativo: false },
-    { id: '13x13', nome: '13x13', largura: 127, altura: 127, preco: 0, ativo: false },
+    { id: '13x18', nome: '13x18', largura: 127, altura: 178, preco: 0, ativo: true },
+    { id: '15x20', nome: '15x20', largura: 152, altura: 203, preco: 0, ativo: true },
+    { id: '15x15', nome: '15x15', largura: 152, altura: 152, preco: 0, ativo: true },
+    { id: '13x13', nome: '13x13', largura: 127, altura: 127, preco: 0, ativo: true },
+    { id: '9x13', nome: '9x13', largura: 89, altura: 127, preco: 0, ativo: true },
   ],
   mostrarPrecos: false,
   maxFotos: 100,

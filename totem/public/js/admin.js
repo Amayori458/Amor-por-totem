@@ -248,7 +248,7 @@ function montarForm() {
     bloco(
       'Tamanhos de foto',
       'largo',
-      el('small', {}, 'Ative só os tamanhos que o papel carregado na impressora consegue fazer. Medidas do papel em milímetros (lado menor primeiro).'),
+      el('small', {}, 'Todos os tamanhos vêm ativos. Desative os que o papel carregado na impressora não consegue fazer. O primeiro da lista é o tamanho inicial das fotos. Medidas do papel em milímetros (lado menor primeiro).'),
       el('table', { class: 'formatos' }, el('thead', {}, el('tr', {}, ...['Ativo', 'Nome', 'Largura (mm)', 'Altura (mm)', 'Preço (R$)', ''].map((t) => el('th', {}, t)))), corpo),
       el('div', {}, botao('Adicionar tamanho', { iconeNome: 'mais', onclick: () => corpo.append(linhaFormato({ nome: '', largura: 102, altura: 152, preco: 0, ativo: true })) })),
     ),

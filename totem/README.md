@@ -21,16 +21,18 @@ O totem manda cada foto já recortada, em 300 dpi, para a **impressora padrão d
 
 1. Instale o driver da ASK-400 e defina-a como **impressora padrão** (*Configurações → Bluetooth e dispositivos → Impressoras*; desligue “Deixar o Windows gerenciar minha impressora padrão”).
 2. Em **Preferências de impressão** do driver, escolha o papel que está carregado (por exemplo `4x6` para 10x15) e deixe **sem margem**.
-3. No painel do totem, aba **Configurações → Tamanhos de foto**, ative só os tamanhos que o rolo carregado faz:
+3. O totem já vem com **todos os tamanhos da ASK-400 ativos**. Cada rolo só faz os tamanhos da sua largura, então no painel, aba **Configurações → Tamanhos de foto**, desative os que o rolo carregado não faz:
 
    | Rolo | Tamanhos | Medida no totem (mm) |
    | --- | --- | --- |
    | 6" (152 mm) | 10x15 · 15x15 · 15x20 | 102×152 · 152×152 · 152×203 |
    | 5" (127 mm) | 9x13 · 13x13 · 13x18 | 89×127 · 127×127 · 127×178 |
 
+   Se um tamanho ficar ativo sem o papel certo na impressora, a foto sai cortada ou a impressora acusa erro de papel.
+
 4. Na aba **Impressora** do painel, imprima a **página de teste**: a linha vermelha deve ficar rente às quatro bordas. Se cortar ou sobrar margem, ajuste o papel nas preferências do driver.
 
-Se um cliente pedir dois tamanhos no mesmo pedido, o totem manda um trabalho de impressão para cada tamanho. O papel de cada trabalho é o que o driver escolher para aquela medida; se a sua impressora só troca de tamanho trocando o rolo, deixe ativo apenas um tamanho.
+Se um cliente pedir dois tamanhos no mesmo pedido, o totem manda um trabalho de impressão para cada tamanho. O papel de cada trabalho é o que o driver escolher para aquela medida; com a ASK-400, deixe ativos apenas os tamanhos do rolo que está carregado.
 
 Prefere imprimir por outro programa? Desligue *Imprimir automaticamente* no painel: o totem só grava as fotos prontas em `dados\pedidos\<data>_<número>\`, uma por arquivo, com o tamanho e o número de cópias no nome (`001_10x15_2x.jpg`).
 

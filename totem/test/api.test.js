@@ -53,10 +53,11 @@ after(() => {
   fs.rmSync(dados, { recursive: true, force: true });
 });
 
-test('config pública só mostra tamanhos ativos e nunca o PIN', async () => {
+test('config pública traz todos os tamanhos e nunca o PIN', async () => {
   const { status, dados: c } = await req('/api/config');
   assert.equal(status, 200);
-  assert.deepEqual(c.formatos.map((f) => f.id), ['10x15']);
+  assert.deepEqual(c.formatos.map((f) => f.id), ['10x15', '13x18', '15x20', '15x15', '13x13', '9x13']);
+  assert.ok(c.formatos.every((f) => f.ativo));
   assert.equal('pin' in c, false);
   assert.equal(c.mostrarPrecos, false);
 });
@@ -82,8 +83,8 @@ test('fluxo completo: sessão, envio, pedido, painel', async () => {
   assert.deepEqual(estado.fotos, [{ id: fid, nome: 'praia.jpg', w: 4000, h: 3000 }]);
   assert.equal((await req(`/api/sessoes/${s.id}/fotos/${fid}`)).dados.byteLength, JPG.length);
 
-  // pedido: tamanho inativo é recusado; o válido gera número e arquivo na pasta
-  assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '15x20', copias: 1 }] } })).status, 400);
+  // pedido: tamanho que não existe é recusado; o válido gera número e arquivo na pasta
+  assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '30x40', copias: 1 }] } })).status, 400);
   assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [] } })).status, 400);
   const p = (await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '10x15', copias: 3, nome: 'praia.jpg' }] } })).dados;
   assert.equal(p.numero, 1);
@@ -111,10 +112,13 @@ test('fluxo completo: sessão, envio, pedido, painel', async () => {
   const cfg = (await req('/api/admin/config', { admin: token })).dados.config;
   cfg.mostrarPrecos = true;
   cfg.formatos[0].preco = 2.5;
+  cfg.formatos.find((f) => f.id === '9x13').ativo = false; // tamanho desligado no painel deixa de ser aceito
   assert.equal((await req('/api/admin/config', { metodo: 'PUT', admin: token, corpo: cfg })).status, 200);
   const p2 = (await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '10x15', copias: 4 }], total: 0.01 } })).dados;
   assert.equal(p2.numero, 2);
   assert.equal(p2.total, 10);
+  assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '9x13', copias: 1 }] } })).status, 400);
+  assert.equal((await req('/api/config')).dados.formatos.some((f) => f.id === '9x13'), false);
 
   // trocar o PIN invalida o padrão
   assert.equal((await req('/api/admin/pin', { metodo: 'POST', admin: token, corpo: { novo: '12' } })).status, 400);
