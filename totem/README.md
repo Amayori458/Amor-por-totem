@@ -19,8 +19,8 @@ Para o totem abrir sozinho ao ligar: aperte `Win + R`, digite `shell:startup` e 
 
 O totem manda cada foto já recortada, em 300 dpi, para a **impressora padrão do Windows**.
 
-1. Instale o driver da ASK-400 e defina-a como **impressora padrão** (*Configurações → Bluetooth e dispositivos → Impressoras*; desligue “Deixar o Windows gerenciar minha impressora padrão”).
-2. Em **Preferências de impressão** do driver, escolha o papel que está carregado (por exemplo `4x6` para 10x15) e deixe **sem margem**.
+1. Ligue a ASK-400 pelo cabo USB e instale o driver dela (uma vez só).
+2. Abra o totem. **Ele procura a ASK-400 e a define como impressora padrão do Windows sozinho** — na janela preta aparece `[impressora] … definida como padrão do Windows`. Para conferir ou trocar, abra o painel → aba **Impressora**: as impressoras instaladas aparecem em uma lista e basta tocar em **Usar esta**. Na mesma aba, **Papel e margens** abre as preferências do driver: escolha o papel que está carregado (por exemplo `4x6` para 10x15) e deixe **sem margem**.
 3. O totem já vem com **todos os tamanhos da ASK-400 ativos**. Cada rolo só faz os tamanhos da sua largura, então no painel, aba **Configurações → Tamanhos de foto**, desative os que o rolo carregado não faz:
 
    | Rolo | Tamanhos | Medida no totem (mm) |

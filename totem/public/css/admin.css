@@ -49,4 +49,12 @@ body.painel { -webkit-user-select: text; user-select: text; }
 
 .cartoes-ajuda { padding: 1.4rem 2rem; display: grid; gap: 1.4rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); overflow: auto; }
 .ajuda { background: var(--surface-raised); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1.6rem; display: grid; gap: 1.1rem; align-content: start; justify-items: start; }
+.ajuda.largo { grid-column: 1 / -1; justify-items: stretch; }
+.impressoras { display: grid; gap: .7rem; }
+.impressoras li { display: flex; align-items: center; gap: 1rem; padding: .8rem 1rem; border: 1.5px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.impressoras li.em-uso { border-color: var(--turquesa-deep); background: var(--turquesa-soft); }
+.impressoras .imp-nome { display: grid; gap: .15rem; margin-right: auto; min-width: 0; }
+.impressoras .imp-nome strong { overflow-wrap: anywhere; }
+.impressoras .imp-nome small { color: var(--ink-muted); font-size: .95rem; }
+.impressoras .imp-nome small.alerta { color: var(--coracao); font-weight: 600; }
 .lista-num { display: grid; gap: .7rem; padding-left: 1.4rem; list-style: decimal; }

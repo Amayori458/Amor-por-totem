@@ -67,6 +67,7 @@ const PADRAO = {
   bordaMm: 4,
   dpi: 300,
   diasGuardar: 7,
+  impressora: '', // nome da impressora no Windows; vazio = o totem procura a ASK-400 sozinho
   internet: true, // receber fotos pelo 4G/5G do cliente, por um túnel Cloudflare
   enderecoPublico: '',
   wifi: { ssid: '', senha: '', tipo: 'WPA' },
@@ -160,6 +161,7 @@ function limparConfig(entrada, atual) {
     bordaMm: numero(e.bordaMm, 0, 20, atual.bordaMm),
     dpi: inteiro(e.dpi, 150, 600, atual.dpi),
     diasGuardar: inteiro(e.diasGuardar, 0, 365, atual.diasGuardar),
+    impressora: texto(e.impressora, 200, atual.impressora),
     internet: logico(e.internet, atual.internet),
     enderecoPublico: e.enderecoPublico === undefined ? atual.enderecoPublico : limparEndereco(e.enderecoPublico),
     wifi: {
@@ -546,6 +548,108 @@ function abrirNoSistema(alvo) {
   const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
   p.on('error', () => {});
   p.unref();
+}
+
+/* ───────────── Impressora (Windows) ─────────────
+ * O navegador do totem imprime na impressora padrão do Windows. Para o lojista não
+ * precisar mexer nas configurações do Windows, o totem:
+ *   - ao abrir, procura a impressora de fotos (Fujifilm ASK-400) e a define como padrão;
+ *   - mostra as impressoras instaladas no painel, para escolher com um toque;
+ *   - desliga o "Deixar o Windows gerenciar minha impressora padrão", que trocaria a
+ *     padrão sozinho.
+ */
+
+const NO_WINDOWS = process.platform === 'win32';
+const PS_UTF8 = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; ';
+const PS_LISTAR = `${PS_UTF8}Get-CimInstance Win32_Printer | Select-Object Name, DriverName, Default, WorkOffline | ConvertTo-Json -Compress`;
+// o nome da impressora vai por variável de ambiente: nunca é colado dentro do comando
+const PS_DEFINIR = `${PS_UTF8}$ErrorActionPreference = 'Stop'; ` +
+  `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows' -Name 'LegacyDefaultPrinterMode' -Value 1 -Type DWord; ` +
+  `$p = Get-CimInstance Win32_Printer | Where-Object { $_.Name -eq $env:TOTEM_IMPRESSORA } | Select-Object -First 1; ` +
+  `if (-not $p) { throw 'impressora nao encontrada' }; ` +
+  `Invoke-CimMethod -InputObject $p -MethodName SetDefaultPrinter | Out-Null`;
+
+function rodarPowerShell(comando, ambiente = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', comando], {
+      env: { ...process.env, ...ambiente },
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let saida = '';
+    const limite = setTimeout(() => p.kill(), 20000);
+    p.stdout.on('data', (d) => (saida += d));
+    p.on('error', (e) => {
+      clearTimeout(limite);
+      reject(e);
+    });
+    p.on('exit', (codigo) => {
+      clearTimeout(limite);
+      if (codigo === 0) resolve(saida);
+      else reject(new Error('o Windows não respondeu ao comando da impressora'));
+    });
+  });
+}
+
+const IMPRESSORA_VIRTUAL = /pdf|xps|onenote|fax|anydesk|send to|enviar para/i;
+const IMPRESSORA_FOTO = /ask[\s-]?400/i;
+
+/** Transforma a resposta do Windows (um objeto, uma lista ou nada) na lista do painel. */
+function interpretarImpressoras(textoJson) {
+  let bruto;
+  try {
+    bruto = JSON.parse(String(textoJson).trim() || '[]');
+  } catch {
+    return [];
+  }
+  return (Array.isArray(bruto) ? bruto : [bruto])
+    .filter((i) => i && typeof i.Name === 'string' && i.Name)
+    .map((i) => ({
+      nome: i.Name,
+      driver: typeof i.DriverName === 'string' ? i.DriverName : '',
+      padrao: i.Default === true,
+      desligada: i.WorkOffline === true,
+      virtual: IMPRESSORA_VIRTUAL.test(i.Name),
+    }));
+}
+
+/** Qual impressora o totem deve usar se o lojista ainda não escolheu: a ASK-400, se existir. */
+function impressoraAutomatica(lista) {
+  const foto = lista.find((i) => IMPRESSORA_FOTO.test(i.nome) || IMPRESSORA_FOTO.test(i.driver));
+  return foto ? foto.nome : '';
+}
+
+async function listarImpressoras() {
+  if (!NO_WINDOWS) return [];
+  return interpretarImpressoras(await rodarPowerShell(PS_LISTAR));
+}
+
+async function definirImpressora(nome) {
+  await rodarPowerShell(PS_DEFINIR, { TOTEM_IMPRESSORA: nome });
+}
+
+/** Ao abrir o totem: garante que a impressora escolhida (ou a ASK-400) é a padrão do Windows. */
+async function prepararImpressora() {
+  if (!NO_WINDOWS) return;
+  try {
+    const lista = await listarImpressoras();
+    const escolhida = lista.find((i) => i.nome === config.impressora);
+    const nome = escolhida ? escolhida.nome : impressoraAutomatica(lista);
+    if (!nome) {
+      const padrao = lista.find((i) => i.padrao);
+      console.log(`  [impressora] não encontrei a ASK-400 instalada. ${padrao ? `O totem vai imprimir na padrão do Windows: ${padrao.nome}.` : 'Instale o driver e escolha a impressora no painel.'}`);
+      return;
+    }
+    await definirImpressora(nome);
+    if (config.impressora !== nome) {
+      config.impressora = nome;
+      await gravarJson(ARQ_CONFIG, config);
+    }
+    const desligada = lista.find((i) => i.nome === nome).desligada;
+    console.log(`  [impressora] ${nome} definida como padrão do Windows${desligada ? ' — mas ela aparece desligada: confira o cabo e a energia' : ''}.`);
+  } catch (e) {
+    console.log(`  [impressora] não consegui configurar sozinho (${e.message}). Escolha a impressora no painel.`);
+  }
 }
 
 /* ───────────── Túnel para a internet (fotos pelo 4G/5G) ─────────────
@@ -941,6 +1045,35 @@ const rotas = [
     abrirNoSistema(alvo);
     json(res, 200, { ok: true });
   }],
+  ['GET', /^\/api\/admin\/impressoras$/, async (req, res) => {
+    exigirAdmin(req);
+    json(res, 200, { windows: NO_WINDOWS, escolhida: config.impressora, impressoras: await listarImpressoras() });
+  }],
+  ['POST', /^\/api\/admin\/impressora$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    if (!NO_WINDOWS) throw erro(400, 'A escolha da impressora pelo painel só funciona no Windows.');
+    const { nome } = await lerJsonCorpo(req);
+    const lista = await listarImpressoras();
+    const alvo = lista.find((i) => i.nome === nome);
+    if (!alvo) throw erro(404, 'Não encontrei esta impressora no Windows.');
+    await definirImpressora(alvo.nome);
+    config.impressora = alvo.nome;
+    await gravarJson(ARQ_CONFIG, config);
+    json(res, 200, { windows: true, escolhida: config.impressora, impressoras: await listarImpressoras() });
+  }],
+  ['POST', /^\/api\/admin\/impressora\/preferencias$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    if (!NO_WINDOWS) throw erro(400, 'Só funciona no Windows.');
+    const alvo = (await listarImpressoras()).find((i) => i.nome === config.impressora || (!config.impressora && i.padrao));
+    if (!alvo) throw erro(404, 'Escolha a impressora primeiro.');
+    // abre a janela "Preferências de impressão" do driver (papel, sem margem...)
+    const p = spawn('rundll32', ['printui.dll,PrintUIEntry', '/e', '/n', alvo.nome], { stdio: 'ignore', detached: true });
+    p.on('error', () => {});
+    p.unref();
+    json(res, 200, { ok: true });
+  }],
   ['POST', /^\/api\/admin\/teclado$/, async (req, res) => {
     exigirAdmin(req);
     exigirLocal(req);
@@ -1046,6 +1179,7 @@ async function iniciar() {
   servidorInternet.listen(PORTA_INTERNET, '127.0.0.1', () => {
     if (config.internet) iniciarTunel();
   });
+  prepararImpressora();
 }
 
 function encerrar() {
@@ -1058,4 +1192,4 @@ process.on('SIGTERM', encerrar);
 
 if (require.main === module) iniciar();
 
-module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador, URL_TUNEL };
+module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador, URL_TUNEL, interpretarImpressoras, impressoraAutomatica };

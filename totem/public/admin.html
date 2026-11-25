@@ -65,6 +65,15 @@
 
     <div class="aba" data-aba="impressora" hidden>
       <div class="cartoes-ajuda">
+        <article class="ajuda largo">
+          <h2 class="t-heading">Impressora do totem</h2>
+          <p id="imp-resumo">Procurando as impressoras instaladas…</p>
+          <ul class="impressoras" id="imp-lista"></ul>
+          <div class="chips">
+            <button class="af-btn" type="button" id="imp-atualizar">Atualizar lista</button>
+            <button class="af-btn" type="button" id="imp-preferencias">Papel e margens (preferências do driver)</button>
+          </div>
+        </article>
         <article class="ajuda">
           <h2 class="t-heading">Página de teste</h2>
           <p>Imprime uma folha com moldura e régua para conferir se o papel e as margens estão certos.</p>
@@ -75,8 +84,8 @@
           <h2 class="t-heading">Como o totem imprime</h2>
           <ol class="lista-num">
             <li>O totem manda cada foto, já recortada no tamanho certo, para a <strong>impressora padrão do Windows</strong>.</li>
-            <li>Em <em>Configurações do Windows → Impressoras</em>, defina a impressora de fotos como padrão.</li>
-            <li>Em <em>Preferências de impressão</em> do driver, escolha o papel carregado (por exemplo 10x15 / 4x6) e impressão <strong>sem margem</strong>.</li>
+            <li>Ao abrir, o totem procura a ASK-400 e a define como padrão sozinho. Se ela não aparecer marcada acima, toque em <strong>Usar esta</strong>.</li>
+            <li>Em <strong>Papel e margens</strong>, escolha o papel carregado (por exemplo 10x15 / 4x6) e impressão <strong>sem margem</strong>.</li>
             <li>Em Configurações, desative os tamanhos que o papel carregado não consegue fazer.</li>
           </ol>
           <p class="pequeno">Aberto pelo “Iniciar-Totem”, o navegador imprime sem mostrar diálogo. Pelo “Iniciar-Teste”, o diálogo aparece para você conferir.</p>

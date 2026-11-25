@@ -124,6 +124,7 @@ function trocarAba(nome) {
   for (const b of $$('#abas .af-chip')) b.setAttribute('aria-pressed', String(b.dataset.aba === nome));
   for (const a of $$('.aba')) a.hidden = a.dataset.aba !== nome;
   if (nome === 'pedidos') carregarPedidos().catch(falhou);
+  if (nome === 'impressora') carregarImpressoras().catch(falhou);
 }
 
 /* — pedidos — */
@@ -362,6 +363,45 @@ function acompanharTunel() {
   }, 3000);
 }
 
+/* — impressora — */
+
+function desenharImpressoras(r) {
+  const resumo = $('#imp-resumo');
+  const lista = $('#imp-lista');
+  $('#imp-preferencias').hidden = !r.windows;
+  if (!r.windows) {
+    resumo.textContent = 'Este computador não é Windows: o totem imprime na impressora padrão do sistema.';
+    lista.replaceChildren();
+    return;
+  }
+  if (!r.impressoras.length) {
+    resumo.textContent = 'Nenhuma impressora instalada no Windows. Ligue a impressora pelo cabo USB, instale o driver e toque em “Atualizar lista”.';
+    lista.replaceChildren();
+    return;
+  }
+  const emUso = r.impressoras.find((i) => i.padrao);
+  resumo.textContent = emUso ? `O totem imprime em: ${emUso.nome}.` : 'Nenhuma impressora está como padrão. Toque em “Usar esta” na impressora de fotos.';
+  lista.replaceChildren(
+    ...r.impressoras.map((i) =>
+      el(
+        'li',
+        { class: i.padrao ? 'em-uso' : '' },
+        el(
+          'span',
+          { class: 'imp-nome' },
+          el('strong', {}, i.nome),
+          i.desligada ? el('small', { class: 'alerta' }, 'Desligada ou sem cabo') : el('small', {}, i.virtual ? 'Não imprime em papel' : i.driver || 'Pronta'),
+        ),
+        i.padrao
+          ? el('span', { class: 'af-badge af-badge-novo' }, 'Em uso')
+          : botao('Usar esta', { variante: i.virtual ? '' : 'primary', onclick: () => adm('/api/admin/impressora', { metodo: 'POST', corpo: { nome: i.nome } }).then(desenharImpressoras).catch(falhou) }),
+      ),
+    ),
+  );
+}
+
+const carregarImpressoras = () => adm('/api/admin/impressoras').then(desenharImpressoras);
+
 /* — página de teste — */
 
 function montarTeste() {
@@ -437,6 +477,8 @@ $('#atualizar').addEventListener('click', () => carregarPedidos().catch(falhou))
 $('#pasta').addEventListener('click', () => adm('/api/admin/pasta', { metodo: 'POST', corpo: {} }).catch(falhou));
 $('#salvar').addEventListener('click', () => salvar().catch(falhou));
 $('#teste').addEventListener('click', () => imprimirTeste().catch(falhou));
+$('#imp-atualizar').addEventListener('click', () => carregarImpressoras().catch(falhou));
+$('#imp-preferencias').addEventListener('click', () => adm('/api/admin/impressora/preferencias', { metodo: 'POST' }).catch(falhou));
 $('#teclado').addEventListener('click', () => adm('/api/admin/teclado', { metodo: 'POST' }).catch(falhou));
 $('#encerrar').addEventListener('click', () =>
   modal('Fechar o totem?', 'O navegador e o servidor serão encerrados. Para abrir de novo, use o atalho “Iniciar-Totem”.', [

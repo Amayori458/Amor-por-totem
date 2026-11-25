@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 
-const { limparConfig, PADRAO, tipoImagem, argsNavegador } = require('../server.js');
+const { limparConfig, PADRAO, tipoImagem, argsNavegador, interpretarImpressoras, impressoraAutomatica } = require('../server.js');
 
 const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 7)]);
 let base;
@@ -158,4 +158,29 @@ test('reconhece imagens pelo conteúdo e monta os argumentos do navegador', () =
   const totem = argsNavegador('totem', 'http://localhost:3000/');
   assert.ok(totem.includes('--kiosk') && totem.includes('--kiosk-printing'));
   assert.equal(argsNavegador('teste', 'x').includes('--kiosk-printing'), false);
+});
+
+test('impressoras: lê a resposta do Windows e escolhe a ASK-400 sozinho', () => {
+  const varias = interpretarImpressoras(
+    JSON.stringify([
+      { Name: 'Microsoft Print to PDF', DriverName: 'Microsoft Print To PDF', Default: true, WorkOffline: false },
+      { Name: 'FUJIFILM ASK-400', DriverName: 'FUJIFILM ASK-400', Default: false, WorkOffline: true },
+      { Name: 'HP LaserJet', DriverName: 'HP Universal', Default: false, WorkOffline: false },
+      { Name: '', Default: false },
+    ]),
+  );
+  assert.deepEqual(varias.map((i) => i.nome), ['Microsoft Print to PDF', 'FUJIFILM ASK-400', 'HP LaserJet']);
+  assert.deepEqual(varias[0], { nome: 'Microsoft Print to PDF', driver: 'Microsoft Print To PDF', padrao: true, desligada: false, virtual: true });
+  assert.equal(varias[1].desligada, true);
+  assert.equal(impressoraAutomatica(varias), 'FUJIFILM ASK-400');
+
+  // uma impressora só: o Windows devolve um objeto, não uma lista
+  const uma = interpretarImpressoras('{"Name":"Foto do balcão","DriverName":"Fujifilm ASK 400 Series","Default":false,"WorkOffline":false}');
+  assert.equal(uma.length, 1);
+  assert.equal(impressoraAutomatica(uma), 'Foto do balcão'); // reconhece pelo driver mesmo com outro nome
+
+  // nada instalado, resposta vazia ou quebrada: lista vazia, nenhuma escolha
+  assert.deepEqual(interpretarImpressoras(''), []);
+  assert.deepEqual(interpretarImpressoras('erro qualquer'), []);
+  assert.equal(impressoraAutomatica(interpretarImpressoras(JSON.stringify([{ Name: 'HP LaserJet', DriverName: 'HP' }]))), '');
 });
