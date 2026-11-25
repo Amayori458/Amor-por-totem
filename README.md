@@ -1,5 +1,9 @@
 # Amor por Fotos — Totem
 
+> **Totem de revelação pronto para instalar:** a pasta [`totem/`](totem/README.md) tem o sistema completo para o monitor touch (envio pelo celular por QR Code, escolha de tamanho e cópias, impressão direta na Fujifilm ASK-400, painel do lojista). Baixe a pasta para o Windows do totem e dê dois cliques em `Iniciar-Teste.bat`. Não tem pagamento e não precisa de `npm install`.
+>
+> Os arquivos na raiz (`package.json`, `vite.config.ts`, `render.yaml`…) são a configuração do protótipo anterior; o código-fonte dele não está neste repositório.
+
 MVP local para um totem de revelação fotográfica: cria sessão, exibe QR Code, recebe imagens pelo celular, permite selecionar formato, cria o pedido, abre o diálogo de impressão e inclui um painel administrativo.
 
 ## Executar em desenvolvimento

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Amor por Fotos — Totem</title>
+<link rel="icon" href="/img/logo.png">
+<link rel="stylesheet" href="/css/fontes.css">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/componentes.css">
+<link rel="stylesheet" href="/css/totem.css">
+<link rel="stylesheet" href="/css/impressao.css">
+</head>
+<body class="totem">
+
+<div id="app" data-tela="inicio">
+
+  <!-- 0 · Início -->
+  <section class="tela inicio" data-tela="inicio">
+    <div class="inicio-texto">
+      <img class="inicio-logo" src="/img/logo.png" alt="Amor por Fotos">
+      <h1 class="t-display" id="chamada">Revele suas fotos na hora</h1>
+      <p class="t-lead">Do celular para o papel em poucos toques.</p>
+      <ol class="inicio-passos">
+        <li><span>1</span>Envie as fotos pelo celular</li>
+        <li><span>2</span>Escolha tamanho e cópias</li>
+        <li><span>3</span>Retire suas fotos</li>
+      </ol>
+      <button class="af-btn af-btn-primary btn-xl" id="comecar" type="button">Tocar para começar</button>
+    </div>
+    <div class="inicio-arte" aria-hidden="true">
+      <svg viewBox="0 0 480 300" preserveAspectRatio="xMinYMid meet">
+        <rect class="a-turq" x="0" y="-32" width="192" height="284" rx="12"/>
+        <rect class="a-deep" x="208" y="52" width="144" height="200" rx="12"/>
+        <rect class="a-ink" x="368" y="16" width="128" height="236" rx="12"/>
+        <rect class="a-heart" x="368" y="264" width="32" height="32" rx="16"/>
+        <g class="a-cut">
+          <rect x="24" y="16" width="24" height="36" rx="6"/><rect x="64" y="16" width="24" height="36" rx="6"/>
+          <rect x="104" y="16" width="24" height="36" rx="6"/><rect x="144" y="16" width="24" height="36" rx="6"/>
+          <rect x="24" y="64" width="24" height="36" rx="6"/><rect x="64" y="64" width="24" height="36" rx="6"/>
+          <rect x="104" y="64" width="24" height="36" rx="6"/><rect x="24" y="112" width="24" height="36" rx="6"/>
+          <rect x="64" y="112" width="24" height="36" rx="6"/><rect x="24" y="160" width="24" height="36" rx="6"/>
+          <rect x="392" y="40" width="24" height="36" rx="6"/><rect x="432" y="40" width="24" height="36" rx="6"/>
+        </g>
+        <g class="a-turq">
+          <rect x="232" y="76" width="24" height="36" rx="6"/><rect x="272" y="124" width="24" height="36" rx="6"/>
+          <rect x="232" y="124" width="24" height="36" rx="6"/><rect x="312" y="172" width="24" height="36" rx="6"/>
+          <rect x="272" y="172" width="24" height="36" rx="6"/><rect x="232" y="172" width="24" height="36" rx="6"/>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Cabeçalho das etapas -->
+  <header class="topo">
+    <img class="topo-logo" id="logo-topo" src="/img/logo.png" alt="Amor por Fotos">
+    <ol class="etapas" aria-label="Etapas">
+      <li data-etapa="fotos"><span>1</span>Enviar</li>
+      <li data-etapa="pedido"><span>2</span>Escolher</li>
+      <li data-etapa="imprimindo"><span>3</span>Revelar</li>
+    </ol>
+    <button class="af-btn" id="cancelar" type="button">Recomeçar</button>
+  </header>
+
+  <!-- 1 · Enviar fotos -->
+  <section class="tela fotos" data-tela="fotos">
+    <aside class="envio">
+      <h2 class="t-title">Envie suas fotos pelo celular</h2>
+      <div class="envio-qr">
+        <div class="qr" id="qr-envio" role="img" aria-label="QR Code para enviar fotos"></div>
+        <ol class="envio-passos">
+          <li>Abra a câmera do celular e aponte para o código.</li>
+          <li>Escolha as fotos que você quer revelar.</li>
+          <li>Elas aparecem nesta tela em instantes.</li>
+        </ol>
+      </div>
+      <p class="envio-semrede" id="sem-rede" hidden>O totem está sem rede no momento. Use um pendrive ou chame um atendente.</p>
+      <div class="envio-wifi" id="bloco-wifi" hidden>
+        <div class="qr qr-pequeno" id="qr-wifi" role="img" aria-label="QR Code do Wi-Fi da loja"></div>
+        <p><strong>O código não abriu?</strong> Conecte primeiro no Wi-Fi <strong id="wifi-nome"></strong> lendo este código menor, depois leia o maior.</p>
+      </div>
+      <label class="af-btn envio-pendrive" id="bloco-pendrive">
+        <span data-icone="usb"></span><span>Usar pendrive ou cartão</span>
+        <input type="file" id="arquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
+      </label>
+    </aside>
+    <div class="galeria">
+      <div class="galeria-topo">
+        <h2 class="t-heading">Suas fotos <span class="contador" id="conta-fotos"></span></h2>
+        <p class="status" id="status-envio"></p>
+      </div>
+      <div class="galeria-vazia" id="galeria-vazia">
+        <span data-icone="moldura"></span>
+        <p>As fotos aparecem aqui assim que você enviar.</p>
+      </div>
+      <div class="grade grade-minis" id="grade-minis"></div>
+    </div>
+    <footer class="barra">
+      <p class="barra-info" id="info-fotos">Envie ao menos uma foto para continuar.</p>
+      <button class="af-btn af-btn-primary btn-lg" id="continuar" type="button" disabled><span>Continuar</span><span data-icone="seta"></span></button>
+    </footer>
+  </section>
+
+  <!-- 2 · Montar pedido -->
+  <section class="tela pedido" data-tela="pedido">
+    <div class="ferramentas">
+      <div class="ferramenta" id="bloco-tamanhos">
+        <span class="rotulo">Tamanho de todas</span>
+        <div class="chips" id="chips-tamanho"></div>
+      </div>
+      <label class="ferramenta chave" id="bloco-borda">
+        <input type="checkbox" id="borda">
+        <span class="chave-trilho" aria-hidden="true"></span>
+        <span>Borda branca</span>
+      </label>
+      <button class="af-btn" id="mais-fotos" type="button"><span data-icone="mais"></span><span>Adicionar fotos</span></button>
+    </div>
+    <p class="dica">Toque em uma foto para ajustar o enquadramento.</p>
+    <div class="grade grade-cartoes" id="grade-cartoes"></div>
+    <footer class="barra">
+      <div class="barra-resumo">
+        <span class="barra-rotulo" id="resumo-linha"></span>
+        <span class="barra-total" id="resumo-total"></span>
+      </div>
+      <button class="af-btn af-btn-primary btn-lg" id="revelar" type="button"><span>Revelar fotos</span><span data-icone="seta"></span></button>
+    </footer>
+  </section>
+
+  <!-- 3 · Imprimindo -->
+  <section class="tela centro" data-tela="imprimindo">
+    <div class="centro-caixa">
+      <div class="pilha" aria-hidden="true"><i></i><i></i><i></i></div>
+      <h2 class="t-title" id="imp-titulo">Preparando suas fotos</h2>
+      <p class="t-lead" id="imp-texto">Só um instante.</p>
+      <div class="progresso" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="imp-barra"><i></i></div>
+    </div>
+  </section>
+
+  <!-- 4 · Pronto -->
+  <section class="tela centro" data-tela="pronto">
+    <div class="centro-caixa">
+      <p class="selo-pedido">Pedido nº <strong id="pronto-numero">0000</strong></p>
+      <h2 class="t-display">Feito com <span class="coracao">♥</span></h2>
+      <p class="t-lead" id="pronto-texto"></p>
+      <p class="pronto-balcao" id="pronto-balcao" hidden></p>
+      <button class="af-btn af-btn-primary btn-lg" id="novo" type="button">Fazer novo pedido</button>
+      <p class="pequeno" id="pronto-volta"></p>
+    </div>
+  </section>
+
+</div>
+
+<div id="modais"></div>
+<div id="impressao"></div>
+
+<script src="/vendor/qrcode.js"></script>
+<script type="module" src="/js/totem.js"></script>
+</body>
+</html>

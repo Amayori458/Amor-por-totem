@@ -1,0 +1,11 @@
+/* Folhas de impressão: uma foto por página, sem margem. O tamanho da página (@page) é
+   definido em js/imprimir.js conforme o formato de cada lote. */
+#impressao { display: none; }
+@media print {
+  html, body { margin: 0 !important; padding: 0 !important; width: auto !important; height: auto !important; overflow: visible !important; position: static !important; background: #fff !important; }
+  body > *:not(#impressao) { display: none !important; }
+  #impressao { display: block; }
+  #impressao .folha { overflow: hidden; break-inside: avoid; break-after: page; }
+  #impressao .folha:last-child { break-after: auto; }
+  #impressao .folha img { display: block; width: 100%; height: 100%; }
+}
