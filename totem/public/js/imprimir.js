@@ -1,6 +1,8 @@
 /* Impressão pelo navegador. Com o Chrome/Edge aberto pelo "Iniciar-Totem.bat"
    (--kiosk-printing), window.print() manda direto para a impressora padrão do Windows. */
 
+import { api } from './comum.js';
+
 const LOTE = 25; // folhas por trabalho de impressão
 
 function raiz() {
@@ -77,4 +79,35 @@ export async function imprimirGrupos(grupos, progresso) {
   } finally {
     r.replaceChildren();
   }
+}
+
+/**
+ * Imprime um pedido já gravado no totem.
+ *   modo 'windows'   — direto pelo Windows (escolhe impressora e papel pelo driver)
+ *   modo 'navegador' — pelo navegador, na impressora padrão
+ *   modo 'auto'      — direto; o que falhar ANTES de ir para a impressora sai pelo navegador
+ * `grupos` é a lista usada pelo navegador ({formato:{id,largura,altura}, folhas:[url]}) ou
+ * uma função que a monta só se for preciso.
+ * Devolve { via: 'windows' | 'navegador' | 'misto', detalhes }.
+ */
+export async function imprimirPedido({ pedidoId, grupos, modo = 'auto', progresso }) {
+  let direto = [];
+  if (modo !== 'navegador') {
+    let r;
+    try {
+      r = await api(`/api/pedidos/${pedidoId}/imprimir`, { metodo: 'POST' });
+    } catch (e) {
+      r = { ok: false, grupos: [], erro: e.message };
+    }
+    direto = r.grupos || [];
+    const depois = direto.find((g) => !g.ok && g.fase === 'impressao');
+    if (depois) throw new Error(`A impressora parou no meio (${depois.erro}).`);
+    if (r.ok) return { via: 'windows', detalhes: direto };
+    if (modo === 'windows') throw new Error(direto.find((g) => !g.ok)?.erro || r.erro || 'A impressão direta não respondeu.');
+  }
+  const todos = typeof grupos === 'function' ? await grupos() : grupos;
+  const feitos = new Set(direto.filter((g) => g.ok).map((g) => g.formato));
+  const pendentes = todos.filter((g) => !feitos.has(g.formato.id));
+  await imprimirGrupos(pendentes, progresso);
+  return { via: feitos.size ? 'misto' : 'navegador', detalhes: direto };
 }

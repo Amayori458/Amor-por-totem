@@ -34,6 +34,7 @@
         <button class="af-chip" type="button" data-aba="pedidos" aria-pressed="true">Pedidos</button>
         <button class="af-chip" type="button" data-aba="config" aria-pressed="false">Configurações</button>
         <button class="af-chip" type="button" data-aba="impressora" aria-pressed="false">Impressora</button>
+        <button class="af-chip" type="button" data-aba="verificacao" aria-pressed="false">Verificação</button>
       </nav>
       <div class="chips">
         <button class="af-btn" type="button" id="teclado" hidden><span data-icone="teclado"></span><span>Teclado</span></button>
@@ -63,6 +64,17 @@
       </footer>
     </div>
 
+    <div class="aba" data-aba="verificacao" hidden>
+      <div class="cartoes-ajuda">
+        <article class="ajuda largo">
+          <h2 class="t-heading">Está tudo pronto?</h2>
+          <p class="ver-resumo" id="ver-resumo">Verificando…</p>
+          <ul class="ver-lista" id="ver-lista"></ul>
+          <div class="chips"><button class="af-btn af-btn-primary" type="button" id="ver-de-novo">Verificar de novo</button></div>
+        </article>
+      </div>
+    </div>
+
     <div class="aba" data-aba="impressora" hidden>
       <div class="cartoes-ajuda">
         <article class="ajuda largo">
@@ -83,7 +95,7 @@
         <article class="ajuda">
           <h2 class="t-heading">Como o totem imprime</h2>
           <ol class="lista-num">
-            <li>O totem manda cada foto, já recortada no tamanho certo, para a <strong>impressora padrão do Windows</strong>.</li>
+            <li>O totem manda cada foto, já recortada no tamanho certo, direto para a impressora escolhida acima, no papel do driver que tem aquela medida. Se isso não estiver disponível, imprime pelo navegador na <strong>impressora padrão do Windows</strong>.</li>
             <li>Ao abrir, o totem procura a ASK-400 e a define como padrão sozinho. Se ela não aparecer marcada acima, toque em <strong>Usar esta</strong>.</li>
             <li>Em <strong>Papel e margens</strong>, escolha o papel carregado (por exemplo 10x15 / 4x6) e impressão <strong>sem margem</strong>.</li>
             <li>Em Configurações, desative os tamanhos que o papel carregado não consegue fazer.</li>

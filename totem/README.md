@@ -10,14 +10,20 @@ Roda no Windows, dentro do Chrome ou do Edge em tela cheia, sem `npm install`. O
 2. Dê dois cliques em **`Iniciar-Teste.bat`**.
    - Na primeira vez o totem baixa sozinho o que falta (o Node.js, se o computador não tiver, e o programa do túnel da internet). Deixe o computador conectado.
    - Se o Windows perguntar sobre o **Firewall**, marque *Redes privadas* e clique em **Permitir** — isso só é usado quando o envio é pelo Wi-Fi da loja.
-3. O totem abre em uma janela normal. Faça um pedido de teste: o diálogo de impressão aparece para você conferir impressora e papel.
-4. Quando estiver tudo certo, use **`Iniciar-Totem.bat`**: abre em tela cheia e imprime direto, sem diálogo.
+3. O totem abre em uma janela normal. Toque **5 vezes no logo**, digite o PIN `1234` e abra a aba **Verificação**: ela confere o programa, o navegador, a impressora, o papel de cada tamanho e o envio pelo 4G, e diz em uma frase o que fazer com o que não estiver certo.
+4. Com a verificação sem itens em vermelho, imprima a **página de teste** (aba Impressora) e faça **um pedido de teste pelo celular no 4G**. Esses dois testes são a prova de que está tudo funcionando neste computador.
+5. Quando estiver tudo certo, use **`Iniciar-Totem.bat`**: abre em tela cheia e imprime direto, sem diálogo.
 
 Para o totem abrir sozinho ao ligar: aperte `Win + R`, digite `shell:startup` e coloque ali um atalho do `Iniciar-Totem.bat`.
 
 ## Impressora (Fujifilm ASK-400)
 
-O totem manda cada foto já recortada, em 300 dpi, para a **impressora padrão do Windows**.
+O totem gera cada foto já recortada, em 300 dpi, e tem **dois caminhos de impressão**:
+
+- **Direto pelo Windows** (principal): manda as fotos para a impressora escolhida no painel, usando o papel do driver que tem a medida do tamanho pedido. Se a impressora acusar erro, a tela avisa o cliente.
+- **Pelo navegador** (reserva): se o caminho direto não estiver disponível, o navegador imprime na impressora padrão do Windows, no papel definido nas preferências do driver.
+
+Em *Configurações → Impressão → Como imprimir* dá para fixar um dos dois, se no seu teste um sair melhor que o outro.
 
 1. Ligue a ASK-400 pelo cabo USB e instale o driver dela (uma vez só).
 2. Abra o totem. **Ele procura a ASK-400 e a define como impressora padrão do Windows sozinho** — na janela preta aparece `[impressora] … definida como padrão do Windows`. Para conferir ou trocar, abra o painel → aba **Impressora**: as impressoras instaladas aparecem em uma lista e basta tocar em **Usar esta**. Na mesma aba, **Papel e margens** abre as preferências do driver: escolha o papel que está carregado (por exemplo `4x6` para 10x15) e deixe **sem margem**.
@@ -70,7 +76,7 @@ O painel só abre na tela do próprio totem, nunca pelo celular de um cliente. P
 | O celular lê o QR mas a página não abre | Veja no painel (*Configurações → Receber fotos*) se o envio pela internet está “Funcionando”. Se estiver “Sem conexão”, o totem está sem internet: o QR usa o Wi-Fi da loja e o celular precisa estar nele (e o Firewall do Windows precisa permitir o Node.js em redes privadas). |
 | O túnel nunca fica “Funcionando” | Internet do totem; antivírus ou firewall da rede bloqueando o `cloudflared`; apague `runtime\cloudflared.exe` e abra o totem de novo para baixar outra vez. |
 | “O totem está sem rede” | O computador não está conectado a nenhuma rede. Conecte à internet e toque em *Recomeçar*. |
-| Não imprime | A ASK-400 é a impressora padrão? Abra pelo `Iniciar-Teste.bat` para ver o diálogo de impressão e a mensagem do driver. |
+| Não imprime | Painel → **Verificação** mostra se a impressora está instalada, ligada e com papel para cada tamanho. Se a página de teste não sair por um caminho, troque em *Configurações → Impressão → Como imprimir* e teste de novo. |
 | Sai com margem ou cortado | Papel e “sem margem” nas preferências do driver; medidas do tamanho no painel. |
 | Preciso sair da tela cheia | Painel → *Fechar totem*, ou `Alt + F4` com teclado. |
 
@@ -80,6 +86,7 @@ O painel só abre na tela do próprio totem, nunca pelo celular de um cliente. P
 - `public/` — tela do totem (`index.html`), página do celular (`enviar.html`) e painel (`admin.html`), em JavaScript sem etapa de build. Visual conforme o design system Amor por Fotos (`css/tokens.css`).
 - `dados/` — criado ao rodar: `config.json`, `pedidos/` e as fotos temporárias. Não vai para o Git.
 - Duas portas: `3000` (tela do totem e rede local) e `3001` (só `127.0.0.1`, usada pelo túnel). Tudo que chega pela 3001 é tratado como “de fora” e só alcança a página de envio.
+- `imprimir.ps1` faz a impressão direta (System.Drawing.Printing): recebe impressora, medida e lista de arquivos por variáveis de ambiente e responde uma linha JSON; o servidor só cai para o navegador quando a falha é anterior ao envio para a impressora.
 - `instalar-tunel.ps1` baixa o `cloudflared` oficial para `runtime/` (conferindo a assinatura digital quando presente). Para atualizar, apague `runtime\cloudflared.exe`.
 - `npm test` roda os testes da API (o túnel é simulado por `ferramentas/falso-cloudflared.js`). Variáveis: `TOTEM_PORTA` (padrão 3000), `TOTEM_PORTA_INTERNET`, `TOTEM_DADOS`, `TOTEM_NAVEGADOR` (caminho do Chrome/Edge), `TOTEM_CLOUDFLARED` (caminho do cloudflared).
 

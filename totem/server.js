@@ -63,6 +63,8 @@ const PADRAO = {
   ociosoSeg: 120,
   pendrive: true,
   imprimir: true,
+  // 'auto': direto pelo Windows e, se não der, pelo navegador · 'windows' · 'navegador'
+  modoImpressao: 'auto',
   permitirBorda: true,
   bordaMm: 4,
   dpi: 300,
@@ -157,6 +159,7 @@ function limparConfig(entrada, atual) {
     ociosoSeg: inteiro(e.ociosoSeg, 30, 900, atual.ociosoSeg),
     pendrive: logico(e.pendrive, atual.pendrive),
     imprimir: logico(e.imprimir, atual.imprimir),
+    modoImpressao: ['auto', 'windows', 'navegador'].includes(e.modoImpressao) ? e.modoImpressao : atual.modoImpressao,
     permitirBorda: logico(e.permitirBorda, atual.permitirBorda),
     bordaMm: numero(e.bordaMm, 0, 20, atual.bordaMm),
     dpi: inteiro(e.dpi, 150, 600, atual.dpi),
@@ -652,6 +655,166 @@ async function prepararImpressora() {
   }
 }
 
+/* ───────────── Impressão direta pelo Windows ─────────────
+ * Caminho principal de impressão: o servidor manda as fotos do pedido para a impressora
+ * pelo próprio Windows (imprimir.ps1), escolhendo a impressora pelo nome e o papel pela
+ * medida. Não depende de impressora padrão nem do navegador. Se algo falhar ANTES de
+ * mandar para a impressora, a tela do totem imprime pelo navegador, como reserva.
+ */
+
+function rodarScript(arquivo, ambiente = {}, tempoMs = 60000) {
+  return new Promise((resolve) => {
+    const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(RAIZ, arquivo)], {
+      env: { ...process.env, ...ambiente },
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let saida = '';
+    const limite = setTimeout(() => p.kill(), tempoMs);
+    p.stdout.on('data', (d) => (saida += d));
+    p.on('error', () => {
+      clearTimeout(limite);
+      resolve('');
+    });
+    p.on('exit', () => {
+      clearTimeout(limite);
+      resolve(saida);
+    });
+  });
+}
+
+/** O script responde uma linha JSON; qualquer outra coisa conta como falha antes de imprimir. */
+function interpretarResposta(saida) {
+  const linhas = String(saida).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  try {
+    const r = JSON.parse(linhas[linhas.length - 1]);
+    if (r && typeof r === 'object' && typeof r.ok === 'boolean') return r;
+  } catch {}
+  return { ok: false, fase: 'preparo', codigo: 'sem-resposta', erro: 'O Windows não respondeu ao pedido de impressão.' };
+}
+
+/** Papel do driver que serve para um tamanho do totem (mesma regra do imprimir.ps1: até 8 mm de folga). */
+function papelPara(formato, papeis) {
+  let melhor = null;
+  let menor = Infinity;
+  for (const p of papeis || []) {
+    const d = Math.max(Math.abs(Math.min(p.largura, p.altura) - formato.largura), Math.abs(Math.max(p.largura, p.altura) - formato.altura));
+    if (d < menor) {
+      menor = d;
+      melhor = p;
+    }
+  }
+  return melhor && menor <= 8 ? melhor : null;
+}
+
+async function papeisDoDriver() {
+  if (!NO_WINDOWS) return null;
+  const r = interpretarResposta(await rodarScript('imprimir.ps1', { TOTEM_IMPRESSORA: config.impressora, TOTEM_SO_PAPEIS: '1' }, 30000));
+  return r.ok && Array.isArray(r.papeis) ? r.papeis : null;
+}
+
+/** Imprime uma lista de arquivos [{arquivo, copias}] num tamanho de papel. */
+async function imprimirDireto(formato, arquivos) {
+  if (!NO_WINDOWS) return { ok: false, fase: 'preparo', codigo: 'sem-windows', erro: 'A impressão direta só existe no Windows.' };
+  const trabalho = path.join(DADOS, `trabalho-${novoId(6)}.json`);
+  await fsp.writeFile(trabalho, JSON.stringify(arquivos));
+  try {
+    const folhas = arquivos.reduce((s, a) => s + a.copias, 0);
+    const saida = await rodarScript(
+      'imprimir.ps1',
+      { TOTEM_IMPRESSORA: config.impressora, TOTEM_LARGURA_MM: String(formato.largura), TOTEM_ALTURA_MM: String(formato.altura), TOTEM_TRABALHO: trabalho, TOTEM_SO_PAPEIS: '' },
+      60000 + folhas * 15000,
+    );
+    return interpretarResposta(saida);
+  } finally {
+    await fsp.rm(trabalho, { force: true });
+  }
+}
+
+/** Manda um pedido inteiro, um trabalho por tamanho de papel. */
+async function imprimirPedido(pedido) {
+  const grupos = new Map();
+  for (const item of pedido.itens.filter((i) => i.recebido)) {
+    const g = grupos.get(item.formato) || { formato: item.formato, nome: item.formatoNome, largura: item.largura, altura: item.altura, arquivos: [] };
+    g.arquivos.push({ arquivo: path.join(dirPedido(pedido.id), item.arquivo), copias: item.copias });
+    grupos.set(item.formato, g);
+  }
+  const resultados = [];
+  for (const g of grupos.values()) {
+    const r = await imprimirDireto(g, g.arquivos);
+    resultados.push({ formato: g.formato, nome: g.nome, ok: r.ok, fase: r.fase || '', codigo: r.codigo || '', erro: r.erro || '', papel: r.papel || '', impressora: r.impressora || '' });
+  }
+  return { ok: resultados.length > 0 && resultados.every((r) => r.ok), grupos: resultados };
+}
+
+/* ───────────── Verificação ("está tudo pronto?") ───────────── */
+
+async function diagnostico() {
+  const itens = [];
+  const item = (titulo, estado, texto, acao = '') => itens.push({ titulo, estado, texto, acao });
+
+  try {
+    const prova = path.join(DADOS, `prova-${novoId(4)}.tmp`);
+    await fsp.writeFile(prova, 'ok');
+    await fsp.rm(prova, { force: true });
+    item('Programa do totem', 'ok', `Funcionando. Os pedidos ficam em ${DIR_PEDIDOS}`);
+  } catch (e) {
+    item('Programa do totem', 'erro', `Não consigo gravar na pasta de dados (${e.message}).`, 'Coloque a pasta do totem em um lugar onde o usuário do Windows possa gravar, como C:\\Totem.');
+  }
+
+  const nav = acharNavegador();
+  if (nav) item('Navegador', 'ok', `${path.basename(nav)} encontrado para abrir a tela cheia.`);
+  else item('Navegador', 'erro', 'Não encontrei o Google Chrome nem o Microsoft Edge.', 'Instale o Google Chrome e abra o totem de novo.');
+
+  if (!NO_WINDOWS) {
+    item('Impressora', 'aviso', 'Este computador não é Windows: o totem imprime pelo navegador, na impressora padrão do sistema.');
+  } else {
+    let lista = null;
+    try {
+      lista = await listarImpressoras();
+    } catch {}
+    const alvo = lista && (lista.find((i) => i.nome === config.impressora) || lista.find((i) => i.padrao));
+    if (!lista) item('Impressora', 'erro', 'O Windows não respondeu à consulta das impressoras.', 'Feche o totem e abra de novo. Se continuar, reinicie o computador.');
+    else if (!lista.length) item('Impressora', 'erro', 'Nenhuma impressora instalada no Windows.', 'Ligue a impressora pelo cabo USB e instale o driver dela.');
+    else if (!alvo) item('Impressora', 'erro', 'Nenhuma impressora escolhida.', 'Na aba Impressora, toque em “Usar esta” na impressora de fotos.');
+    else if (alvo.desligada) item('Impressora', 'erro', `${alvo.nome} aparece desligada ou sem cabo.`, 'Confira a energia e o cabo USB e toque em “Verificar de novo”.');
+    else if (alvo.virtual) item('Impressora', 'aviso', `Em uso: ${alvo.nome}, que não imprime em papel.`, 'Na aba Impressora, toque em “Usar esta” na impressora de fotos.');
+    else item('Impressora', 'ok', `${alvo.nome} instalada e ligada.`);
+
+    if (alvo && !alvo.desligada) {
+      const papeis = await papeisDoDriver();
+      const ativos = config.formatos.filter((f) => f.ativo);
+      if (!papeis) {
+        item('Papel de cada tamanho', 'aviso', 'Não consegui ler os papéis do driver. O totem vai imprimir pelo navegador, no papel definido nas preferências do driver.', 'Imprima a página de teste para conferir.');
+      } else {
+        const certos = [];
+        const semPapel = [];
+        for (const f of ativos) {
+          const p = papelPara(f, papeis);
+          if (p) certos.push(`${f.nome} → “${p.nome}”`);
+          else semPapel.push(f.nome);
+        }
+        if (!semPapel.length) item('Papel de cada tamanho', 'ok', `O driver tem papel para todos os tamanhos ativos: ${certos.join(', ')}.`);
+        else if (certos.length) item('Papel de cada tamanho', 'aviso', `Com papel no driver: ${certos.join(', ')}. Sem papel no driver: ${semPapel.join(', ')}.`, `Em Configurações, desative ${semPapel.join(', ')} — ou confira as medidas desses tamanhos.`);
+        else item('Papel de cada tamanho', 'erro', `O driver não tem papel para nenhum tamanho ativo (${semPapel.join(', ')}).`, 'Confira as medidas dos tamanhos em Configurações e o papel nas preferências do driver.');
+      }
+    }
+  }
+
+  const t = estadoTunel();
+  if (config.enderecoPublico) item('Fotos pelo 4G/5G', 'ok', `O QR Code usa o endereço fixo ${config.enderecoPublico}.`);
+  else if (!config.internet) item('Fotos pelo 4G/5G', 'aviso', 'Desligado: o celular do cliente precisa estar no Wi-Fi da loja.', 'Ligue em Configurações → Receber fotos.');
+  else if (t.estado === 'ativo') item('Fotos pelo 4G/5G', 'ok', `Funcionando e testado: ${t.url}`);
+  else if (t.estado === 'erro') item('Fotos pelo 4G/5G', 'erro', `Sem conexão: ${t.erro}.`, 'Confira a internet do computador. O totem tenta de novo sozinho; enquanto isso o QR usa o Wi-Fi da loja.');
+  else item('Fotos pelo 4G/5G', 'aviso', 'Conectando… toque em “Verificar de novo” em alguns segundos.');
+
+  const rede = enderecos();
+  if (rede.length) item('Rede da loja (reserva)', 'ok', `${rede[0].url} — usada se a internet cair; o celular precisa estar no mesmo Wi-Fi.`);
+  else item('Rede da loja (reserva)', 'aviso', 'O computador não está em nenhuma rede local.', 'Sem internet e sem rede, só o pendrive funciona.');
+
+  return { pronto: !itens.some((i) => i.estado === 'erro'), itens };
+}
+
 /* ───────────── Túnel para a internet (fotos pelo 4G/5G) ─────────────
  * O totem abre um "quick tunnel" da Cloudflare (gratuito, sem conta): um endereço
  * https://….trycloudflare.com que leva só até a porta PORTA_INTERNET deste computador.
@@ -975,9 +1138,14 @@ const rotas = [
     const corpo = await lerJsonCorpo(req);
     const p = await lerPedido(id);
     p.status = corpo.impresso === true ? 'impresso' : 'salvo';
+    p.via = ['windows', 'navegador', 'misto'].includes(corpo.via) ? corpo.via : '';
     p.concluido = new Date().toISOString();
     await gravarPedido(p);
     json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/pedidos\/([\d_-]+)\/imprimir$/, async (req, res, [id]) => {
+    exigirLocal(req);
+    json(res, 200, await imprimirPedido(await lerPedido(id)));
   }],
 
   /* — painel do lojista — */
@@ -1044,6 +1212,26 @@ const rotas = [
     await fsp.mkdir(alvo, { recursive: true });
     abrirNoSistema(alvo);
     json(res, 200, { ok: true });
+  }],
+  ['GET', /^\/api\/admin\/diagnostico$/, async (req, res) => {
+    exigirAdmin(req);
+    json(res, 200, await diagnostico());
+  }],
+  ['POST', /^\/api\/admin\/teste-impressao$/, async (req, res, _p, url) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    const f = config.formatos.find((x) => x.id === url.searchParams.get('formato'));
+    if (!f) {
+      req.resume();
+      throw erro(400, 'Tamanho desconhecido.');
+    }
+    const semExt = path.join(DADOS, `teste-${novoId(6)}`);
+    await receberImagem(req, semExt, MAX_FOTO, ['jpg']);
+    try {
+      json(res, 200, await imprimirDireto(f, [{ arquivo: `${semExt}.jpg`, copias: 1 }]));
+    } finally {
+      await fsp.rm(`${semExt}.jpg`, { force: true });
+    }
   }],
   ['GET', /^\/api\/admin\/impressoras$/, async (req, res) => {
     exigirAdmin(req);
@@ -1192,4 +1380,4 @@ process.on('SIGTERM', encerrar);
 
 if (require.main === module) iniciar();
 
-module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador, URL_TUNEL, interpretarImpressoras, impressoraAutomatica };
+module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador, URL_TUNEL, interpretarImpressoras, impressoraAutomatica, papelPara, interpretarResposta };

@@ -1,7 +1,7 @@
 /* Painel do lojista: pedidos, configurações e teste de impressão. */
 import { $, $$, el, api, brl, plural } from './comum.js';
 import { icone, aplicarIcones } from './icones.js';
-import { imprimirGrupos } from './imprimir.js';
+import { imprimirGrupos, imprimirPedido } from './imprimir.js';
 
 const CHAVE = 'totem-admin';
 let token = sessionStorage.getItem(CHAVE) || '';
@@ -118,6 +118,7 @@ async function abrirPainel() {
   acompanharTunel();
   montarTeste();
   await carregarPedidos();
+  verificar().catch(() => {}); // já deixa a aba Verificação marcada se algo precisar de atenção
 }
 
 function trocarAba(nome) {
@@ -125,6 +126,7 @@ function trocarAba(nome) {
   for (const a of $$('.aba')) a.hidden = a.dataset.aba !== nome;
   if (nome === 'pedidos') carregarPedidos().catch(falhou);
   if (nome === 'impressora') carregarImpressoras().catch(falhou);
+  if (nome === 'verificacao') verificar().catch(falhou);
 }
 
 /* — pedidos — */
@@ -195,20 +197,24 @@ async function carregarPedidos() {
 }
 
 async function reimprimir(p) {
-  const grupos = new Map();
   const urls = [];
-  try {
+  if (!p.itens.some((i) => i.recebido)) throw new Error('Este pedido não tem fotos gravadas.');
+  // só baixa as fotos para o navegador se a impressão direta pelo Windows não resolver
+  const montar = async () => {
+    const grupos = new Map();
     for (const item of p.itens.filter((i) => i.recebido)) {
       const resp = await fetch(`/api/admin/pedidos/${p.id}/itens/${item.n}`, { headers: { 'X-Admin': token } });
       if (!resp.ok) throw Object.assign(new Error('Não encontrei os arquivos deste pedido.'), { status: resp.status });
       const url = URL.createObjectURL(await resp.blob());
       urls.push(url);
-      const g = grupos.get(item.formato) || { formato: { largura: item.largura, altura: item.altura }, folhas: [] };
+      const g = grupos.get(item.formato) || { formato: { id: item.formato, largura: item.largura, altura: item.altura }, folhas: [] };
       for (let c = 0; c < item.copias; c++) g.folhas.push(url);
       grupos.set(item.formato, g);
     }
-    if (!urls.length) throw new Error('Este pedido não tem fotos gravadas.');
-    await imprimirGrupos([...grupos.values()]);
+    return [...grupos.values()];
+  };
+  try {
+    await imprimirPedido({ pedidoId: p.id, grupos: montar, modo: dados.config.modoImpressao });
   } finally {
     for (const u of urls) URL.revokeObjectURL(u);
   }
@@ -283,6 +289,19 @@ function montarForm() {
       'Impressão',
       '',
       chave('imprimir', 'Imprimir automaticamente ao confirmar', c.imprimir),
+      campo(
+        'Como imprimir',
+        el(
+          'select',
+          { name: 'modoImpressao' },
+          ...[
+            ['auto', 'Automático (recomendado)'],
+            ['windows', 'Só direto pelo Windows'],
+            ['navegador', 'Só pelo navegador'],
+          ].map(([valor, rotulo]) => el('option', { value: valor, selected: c.modoImpressao === valor }, rotulo)),
+        ),
+        'Automático: o totem manda direto para a impressora escolhendo o papel pelo driver; se isso não estiver disponível, imprime pelo navegador na impressora padrão. Troque aqui se um dos dois caminhos não sair bem no teste.',
+      ),
       el('small', {}, `Desligado, o totem só grava as fotos prontas na pasta de pedidos (${dados.pastaPedidos}) para você imprimir por outro programa.`),
       el('div', { class: 'dupla' }, campo('Resolução (dpi)', numero('dpi', c.dpi, { min: '150', max: '600' })), campo('Guardar pedidos por (dias)', numero('diasGuardar', c.diasGuardar, { min: '0', max: '365' }), '0 = nunca apagar')),
     ),
@@ -308,6 +327,7 @@ async function salvar() {
     wifi: { ssid: v('wifi.ssid').value, senha: v('wifi.senha').value, tipo: v('wifi.senha').value ? 'WPA' : 'nopass' },
     pendrive: v('pendrive').checked,
     imprimir: v('imprimir').checked,
+    modoImpressao: v('modoImpressao').value,
     dpi: Number(v('dpi').value),
     diasGuardar: Number(v('diasGuardar').value),
     formatos: $$('.formatos tbody tr', f).map((tr) => {
@@ -361,6 +381,36 @@ function acompanharTunel() {
     }
     acompanharTunel();
   }, 3000);
+}
+
+/* — verificação — */
+
+const ROTULO_ESTADO = { ok: 'Certo', aviso: 'Atenção', erro: 'Resolver' };
+
+async function verificar() {
+  const alvo = $('#ver-lista');
+  $('#ver-resumo').textContent = 'Verificando…';
+  $('#ver-resumo').className = 'ver-resumo';
+  const r = await adm('/api/admin/diagnostico');
+  const erros = r.itens.filter((i) => i.estado === 'erro').length;
+  const avisos = r.itens.filter((i) => i.estado === 'aviso').length;
+  $('#ver-resumo').textContent = erros
+    ? `${plural(erros, 'item precisa', 'itens precisam')} ser resolvido${erros === 1 ? '' : 's'} antes de abrir para os clientes.`
+    : avisos
+      ? `Pode funcionar, mas ${plural(avisos, 'item merece', 'itens merecem')} sua atenção. Depois, imprima a página de teste e faça um pedido de teste pelo celular.`
+      : 'Tudo certo por aqui. Para fechar, imprima a página de teste e faça um pedido de teste pelo celular.';
+  $('#ver-resumo').classList.add(erros ? 'erro' : avisos ? 'aviso' : 'ok');
+  $('#abas [data-aba="verificacao"]').classList.toggle('pendente', erros > 0);
+  alvo.replaceChildren(
+    ...r.itens.map((i) =>
+      el(
+        'li',
+        { class: `ver-item ${i.estado}` },
+        el('span', { class: 'ver-estado' }, ROTULO_ESTADO[i.estado]),
+        el('div', {}, el('strong', {}, i.titulo), el('p', {}, i.texto), i.acao && el('p', { class: 'ver-acao' }, i.acao)),
+      ),
+    ),
+  );
 }
 
 /* — impressora — */
@@ -460,12 +510,22 @@ function paginaTeste(f, dpi) {
 async function imprimirTeste() {
   const f = dados.config.formatos.find((x) => x.id === formatoTeste);
   await document.fonts.ready;
-  const url = URL.createObjectURL(await paginaTeste(f, dados.config.dpi));
+  const folha = await paginaTeste(f, dados.config.dpi);
+  const modo = dados.config.modoImpressao;
+  let motivo = '';
+  if (modo !== 'navegador') {
+    const r = await adm(`/api/admin/teste-impressao?formato=${encodeURIComponent(f.id)}`, { metodo: 'POST', bruto: folha });
+    if (r.ok) return modal('Teste enviado', `Foi para a impressora ${r.impressora}, no papel “${r.papel}” do driver. Confira se a linha vermelha ficou rente às quatro bordas.`, [['Entendi', null]]);
+    if (modo === 'windows' || r.fase === 'impressao') return modal('O teste não saiu', `${r.erro} Veja a aba Verificação.`, [['Entendi', null]]);
+    motivo = r.erro;
+  }
+  const url = URL.createObjectURL(folha);
   try {
     await imprimirGrupos([{ formato: f, folhas: [url] }]);
   } finally {
     URL.revokeObjectURL(url);
   }
+  modal('Teste enviado pelo navegador', `${motivo ? `A impressão direta não estava disponível (${motivo}) — ` : ''}o teste foi para a impressora padrão do Windows, no papel definido nas preferências do driver.`, [['Entendi', null]]);
 }
 
 /* ───────────── eventos ───────────── */
@@ -477,6 +537,7 @@ $('#atualizar').addEventListener('click', () => carregarPedidos().catch(falhou))
 $('#pasta').addEventListener('click', () => adm('/api/admin/pasta', { metodo: 'POST', corpo: {} }).catch(falhou));
 $('#salvar').addEventListener('click', () => salvar().catch(falhou));
 $('#teste').addEventListener('click', () => imprimirTeste().catch(falhou));
+$('#ver-de-novo').addEventListener('click', () => verificar().catch(falhou));
 $('#imp-atualizar').addEventListener('click', () => carregarImpressoras().catch(falhou));
 $('#imp-preferencias').addEventListener('click', () => adm('/api/admin/impressora/preferencias', { metodo: 'POST' }).catch(falhou));
 $('#teclado').addEventListener('click', () => adm('/api/admin/teclado', { metodo: 'POST' }).catch(falhou));

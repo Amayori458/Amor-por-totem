@@ -4,7 +4,7 @@ import {
   moldura, limitarAjuste, dpiEfetivo, pintarPrevia, renderizarImpressao, qrSvg, textoWifi,
 } from './comum.js';
 import { icone, aplicarIcones } from './icones.js';
-import { imprimirGrupos } from './imprimir.js';
+import { imprimirPedido } from './imprimir.js';
 
 const DPI_MINIMO = 110; // abaixo disso a foto sai visivelmente sem nitidez
 const app = $('#app');
@@ -628,14 +628,21 @@ async function revelar() {
       grupos.set(fmt.id, g);
       tocou();
     }
+    let via = '';
     if (E.cfg.imprimir) {
       progresso(pesoPreparo, 'Revelando suas fotos', 'Enviando para a impressora.');
-      await imprimirGrupos([...grupos.values()], (feitas, total) => {
-        progresso(pesoPreparo + (feitas / total) * (1 - pesoPreparo), null, `${feitas} de ${plural(total, 'cópia', 'cópias')}`);
-        tocou();
+      const r = await imprimirPedido({
+        pedidoId: pedido.id,
+        grupos: [...grupos.values()],
+        modo: E.cfg.modoImpressao,
+        progresso: (feitas, total) => {
+          progresso(pesoPreparo + (feitas / total) * (1 - pesoPreparo), null, `${feitas} de ${plural(total, 'cópia', 'cópias')}`);
+          tocou();
+        },
       });
+      via = r.via;
     }
-    await api(`/api/pedidos/${pedido.id}/concluir`, { metodo: 'POST', corpo: { impresso: E.cfg.imprimir } }).catch(() => {});
+    await api(`/api/pedidos/${pedido.id}/concluir`, { metodo: 'POST', corpo: { impresso: E.cfg.imprimir, via } }).catch(() => {});
     progresso(1);
     mostrarPronto(pedido);
   } catch (e) {

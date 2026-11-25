@@ -57,4 +57,16 @@ body.painel { -webkit-user-select: text; user-select: text; }
 .impressoras .imp-nome strong { overflow-wrap: anywhere; }
 .impressoras .imp-nome small { color: var(--ink-muted); font-size: .95rem; }
 .impressoras .imp-nome small.alerta { color: var(--coracao); font-weight: 600; }
+.ver-resumo { font-weight: 600; padding: .9rem 1.1rem; border-radius: var(--radius-md); background: var(--surface-soft); }
+.ver-resumo.ok { background: var(--turquesa-soft); color: var(--turquesa-deep); }
+.ver-resumo.erro { background: var(--coracao-soft); color: var(--coracao); }
+.ver-lista { display: grid; gap: .7rem; }
+.ver-item { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; align-items: start; padding: .9rem 1rem; border: 1.5px solid var(--line); border-radius: var(--radius-md); }
+.ver-item p { color: var(--ink-muted); overflow-wrap: anywhere; }
+.ver-item .ver-acao { color: var(--ink); font-weight: 600; margin-top: .2rem; }
+.ver-estado { font: 700 .85rem/1 var(--font-sans); letter-spacing: .04em; text-transform: uppercase; padding: .5rem .6rem; border-radius: var(--radius-sm); text-align: center; background: var(--turquesa-soft); color: var(--turquesa-deep); }
+.ver-item.aviso .ver-estado { background: var(--surface-soft); color: var(--ink); border: 1.5px solid var(--line-strong); }
+.ver-item.erro { border-color: var(--coracao); }
+.ver-item.erro .ver-estado { background: var(--coracao); color: var(--on-coracao); }
+.abas .af-chip.pendente::after { content: ""; width: .7rem; height: .7rem; border-radius: 50%; background: var(--coracao); }
 .lista-num { display: grid; gap: .7rem; padding-left: 1.4rem; list-style: decimal; }

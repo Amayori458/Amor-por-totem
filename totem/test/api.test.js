@@ -184,3 +184,39 @@ test('impressoras: lê a resposta do Windows e escolhe a ASK-400 sozinho', () =>
   assert.deepEqual(interpretarImpressoras('erro qualquer'), []);
   assert.equal(impressoraAutomatica(interpretarImpressoras(JSON.stringify([{ Name: 'HP LaserJet', DriverName: 'HP' }]))), '');
 });
+
+test('impressão direta: papel pela medida e leitura da resposta do Windows', async () => {
+  const { papelPara, interpretarResposta } = require('../server.js');
+  const papeis = [
+    { nome: '(4x6)', largura: 101.6, altura: 152.4 },
+    { nome: '(6x8)', largura: 203.2, altura: 152.4 }, // alguns drivers descrevem o papel deitado
+    { nome: 'A4', largura: 210, altura: 297 },
+  ];
+  assert.equal(papelPara({ largura: 102, altura: 152 }, papeis).nome, '(4x6)');
+  assert.equal(papelPara({ largura: 152, altura: 203 }, papeis).nome, '(6x8)');
+  assert.equal(papelPara({ largura: 127, altura: 178 }, papeis), null); // 13x18 não cabe em nenhum
+  assert.equal(papelPara({ largura: 102, altura: 152 }, []), null);
+
+  assert.deepEqual(interpretarResposta('aviso qualquer\r\n{"ok":true,"papel":"(4x6)","folhas":3}\r\n'), { ok: true, papel: '(4x6)', folhas: 3 });
+  // script que nem chegou a rodar (erro de sintaxe, PowerShell ausente): falha ANTES de imprimir,
+  // que é o que libera a impressão de reserva pelo navegador
+  for (const lixo of ['', 'ParserError: At line:3', '{"sem":"ok"}']) {
+    const r = interpretarResposta(lixo);
+    assert.equal(r.ok, false);
+    assert.equal(r.fase, 'preparo');
+  }
+
+  // fora do Windows a rota responde "não disponível, antes de imprimir" e a verificação não acusa erro por isso
+  if (process.platform !== 'win32') {
+    const p = (await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '10x15', copias: 1 }] } })).dados;
+    await req(`/api/pedidos/${p.id}/itens/1`, { metodo: 'PUT', bruto: JPG });
+    const r = (await req(`/api/pedidos/${p.id}/imprimir`, { metodo: 'POST' })).dados;
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.grupos.map((g) => [g.formato, g.fase, g.codigo]), [['10x15', 'preparo', 'sem-windows']]);
+    const { token } = (await req('/api/admin/entrar', { metodo: 'POST', corpo: { pin: '864213' } })).dados;
+    const d = (await req('/api/admin/diagnostico', { admin: token })).dados;
+    assert.ok(d.itens.some((i) => i.titulo === 'Programa do totem' && i.estado === 'ok'));
+    assert.ok(d.itens.some((i) => i.titulo === 'Impressora' && i.estado === 'aviso'));
+    assert.equal((await req('/api/admin/diagnostico')).status, 401);
+  }
+});
