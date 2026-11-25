@@ -147,6 +147,7 @@ async function comecar() {
     E.fotos = [];
     E.borda = false;
     $('#borda').checked = false;
+    $('#grade-minis').replaceChildren();
     montarEnvio();
     atualizarGaleria();
     irPara('fotos');
@@ -158,19 +159,22 @@ async function comecar() {
   }
 }
 
+/** Desenha o QR Code de envio. É refeito sozinho se o endereço mudar (túnel conectou ou caiu). */
 function montarEnvio() {
   const temRede = !!E.sessao.urlEnvio;
+  const internet = temRede && E.sessao.viaInternet;
   $('.envio-qr').hidden = !temRede;
   $('#sem-rede').hidden = temRede;
   if (temRede) $('#qr-envio').innerHTML = qrSvg(E.sessao.urlEnvio);
   const w = E.cfg.wifi;
-  const temWifi = temRede && !!w.ssid;
+  // pela internet o cliente usa o próprio 4G/5G; o Wi-Fi da loja só entra quando o QR é da rede local
+  const temWifi = temRede && !internet && !!w.ssid;
+  $('#envio-rede').textContent = !temRede ? '' : internet ? 'Funciona com a internet do seu celular (4G, 5G ou Wi-Fi).' : temWifi ? '' : 'Seu celular precisa estar no Wi-Fi da loja.';
   $('#bloco-wifi').hidden = !temWifi;
   if (temWifi) {
     $('#qr-wifi').innerHTML = qrSvg(textoWifi(w));
     $('#wifi-nome').textContent = w.ssid;
   }
-  $('#grade-minis').replaceChildren();
 }
 
 async function reiniciar() {
@@ -196,6 +200,11 @@ async function sondar() {
     try {
       const s = await api(`/api/sessoes/${minha.id}`);
       if (E.sessao !== minha) return;
+      if (s.urlEnvio !== minha.urlEnvio || s.viaInternet !== minha.viaInternet) {
+        minha.urlEnvio = s.urlEnvio;
+        minha.viaInternet = s.viaInternet;
+        montarEnvio();
+      }
       const conhecidas = new Set(E.fotos.map((f) => f.id));
       const novas = s.fotos.filter((f) => !conhecidas.has(f.id));
       for (const n of novas) {

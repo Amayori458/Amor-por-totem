@@ -24,6 +24,9 @@ const RAIZ = __dirname;
 const PUBLICO = path.join(RAIZ, 'public');
 const DADOS = path.resolve(process.env.TOTEM_DADOS || path.join(RAIZ, 'dados'));
 const PORTA = Number(process.env.TOTEM_PORTA || process.env.PORT || 3000);
+// Porta que só o túnel da internet usa. Tudo que chega por ela é tratado como "de fora",
+// mesmo vindo de 127.0.0.1 (o cloudflared roda no próprio totem).
+const PORTA_INTERNET = Number(process.env.TOTEM_PORTA_INTERNET || PORTA + 1);
 const ADMIN_REMOTO = process.env.TOTEM_ADMIN_REMOTO === '1';
 const ARGS = new Set(process.argv.slice(2));
 
@@ -63,6 +66,7 @@ const PADRAO = {
   bordaMm: 4,
   dpi: 300,
   diasGuardar: 7,
+  internet: true, // receber fotos pelo 4G/5G do cliente, por um túnel Cloudflare
   enderecoPublico: '',
   wifi: { ssid: '', senha: '', tipo: 'WPA' },
   pin: null, // { sal, hash } — enquanto for null, o PIN é 1234
@@ -155,6 +159,7 @@ function limparConfig(entrada, atual) {
     bordaMm: numero(e.bordaMm, 0, 20, atual.bordaMm),
     dpi: inteiro(e.dpi, 150, 600, atual.dpi),
     diasGuardar: inteiro(e.diasGuardar, 0, 365, atual.diasGuardar),
+    internet: logico(e.internet, atual.internet),
     enderecoPublico: e.enderecoPublico === undefined ? atual.enderecoPublico : limparEndereco(e.enderecoPublico),
     wifi: {
       ssid: texto(w.ssid, 32, atual.wifi.ssid),
@@ -192,13 +197,30 @@ function enderecos() {
   return lista.sort((a, b) => a.peso - b.peso).map(({ nome, ip }) => ({ nome, ip, url: `http://${ip}:${PORTA}` }));
 }
 
+/** Endereço que vai no QR Code: fixo (se configurado), túnel da internet ou rede local. */
 function urlBase() {
   if (config.enderecoPublico) return config.enderecoPublico;
+  if (config.internet && tunel.estado === 'ativo') return tunel.url;
   const e = enderecos();
   return e.length ? e[0].url : '';
 }
 
+/** O celular precisa estar no Wi-Fi da loja? Só quando o QR aponta para a rede local. */
+function viaInternet() {
+  return !!config.enderecoPublico || (config.internet && tunel.estado === 'ativo');
+}
+
+function urlEnvio(id) {
+  const base = urlBase();
+  return base ? `${base}/enviar?s=${id}` : '';
+}
+
+/** A requisição chegou pela porta do túnel (internet)? */
+const ehExterno = (req) => req.socket.server === servidorInternet;
+
+/** Só a tela do próprio totem é "local": mesma máquina e fora da porta do túnel. */
 function ehLocal(req) {
+  if (ehExterno(req)) return false;
   const a = req.socket.remoteAddress || '';
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
 }
@@ -447,7 +469,7 @@ function exigirLocal(req) {
 
 function configPublica() {
   const { pin, ...resto } = config;
-  return { ...resto, formatos: config.formatos.filter((f) => f.ativo), urlBase: urlBase() };
+  return { ...resto, formatos: config.formatos.filter((f) => f.ativo), urlBase: urlBase(), viaInternet: viaInternet() };
 }
 
 /* ───────────── Navegador do totem ───────────── */
@@ -525,6 +547,153 @@ function abrirNoSistema(alvo) {
   p.unref();
 }
 
+/* ───────────── Túnel para a internet (fotos pelo 4G/5G) ─────────────
+ * O totem abre um "quick tunnel" da Cloudflare (gratuito, sem conta): um endereço
+ * https://….trycloudflare.com que leva só até a porta PORTA_INTERNET deste computador.
+ * O QR Code passa a apontar para ele, então o cliente não precisa do Wi-Fi da loja.
+ * As fotos atravessam o túnel criptografadas e não ficam guardadas na internet.
+ */
+
+const URL_TUNEL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+const tunel = { estado: 'desligado', url: '', erro: '', proc: null, ocupado: false, tentativas: 0, falhas: 0, religar: null, vigia: null };
+
+const estadoTunel = () => ({ estado: tunel.estado, url: tunel.url, erro: tunel.erro });
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function caminhoCloudflared() {
+  if (process.env.TOTEM_CLOUDFLARED) return process.env.TOTEM_CLOUDFLARED;
+  const nome = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const local = path.join(RAIZ, 'runtime', nome);
+  if (fs.existsSync(local)) return local;
+  return process.platform === 'win32' ? null : nome; // fora do Windows, usa o que estiver instalado
+}
+
+/** No Windows, baixa o cloudflared oficial para a pasta runtime (só na primeira vez). */
+function baixarCloudflared() {
+  return new Promise((resolve, reject) => {
+    const p = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(RAIZ, 'instalar-tunel.ps1')], { stdio: 'ignore', windowsHide: true });
+    p.on('error', reject);
+    p.on('exit', (codigo) => (codigo === 0 ? resolve() : reject(new Error('não consegui baixar o programa do túnel (sem internet?)'))));
+  });
+}
+
+/** O endereço público já chega até este totem? */
+async function tunelResponde(url) {
+  if (process.env.TOTEM_TUNEL_PING === '0') return true;
+  try {
+    const r = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(8000) });
+    return r.ok && (await r.json()).totem === true;
+  } catch {
+    return false;
+  }
+}
+
+function falhaTunel(mensagem) {
+  tunel.estado = 'erro';
+  tunel.url = '';
+  tunel.erro = mensagem;
+  if (tunel.tentativas === 0) console.log(`  [internet] ${mensagem} — o QR usa o Wi-Fi da loja enquanto isso.`);
+  if (!config.internet) return;
+  const espera = Math.min(120, 5 * 2 ** Math.min(tunel.tentativas++, 5)) * 1000;
+  clearTimeout(tunel.religar);
+  tunel.religar = setTimeout(iniciarTunel, espera);
+  tunel.religar.unref();
+}
+
+async function iniciarTunel() {
+  if (!config.internet || tunel.proc || tunel.ocupado) return;
+  tunel.ocupado = true;
+  clearTimeout(tunel.religar);
+  try {
+    let exe = caminhoCloudflared();
+    if (!exe) {
+      tunel.estado = 'baixando';
+      console.log('  [internet] baixando o programa do túnel (só na primeira vez)...');
+      await baixarCloudflared();
+      exe = caminhoCloudflared();
+      if (!exe) throw new Error('o programa do túnel não foi instalado');
+    }
+    if (!config.internet) return;
+    tunel.estado = 'conectando';
+    tunel.erro = '';
+    const p = spawn(exe, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${PORTA_INTERNET}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    tunel.proc = p;
+    let saida = '';
+    let achou = false;
+    const ler = (parte) => {
+      if (achou) return;
+      saida = (saida + parte).slice(-8000);
+      const m = URL_TUNEL.exec(saida);
+      if (!m) return;
+      achou = true;
+      confirmarTunel(p, m[0]);
+    };
+    p.stdout.on('data', ler);
+    p.stderr.on('data', ler);
+    p.on('error', (e) => {
+      if (tunel.proc === p) tunel.proc = null;
+      falhaTunel(e.code === 'ENOENT' ? 'programa do túnel (cloudflared) não encontrado' : `túnel não abriu: ${e.message}`);
+    });
+    p.on('exit', () => {
+      if (tunel.proc !== p) return;
+      tunel.proc = null;
+      clearInterval(tunel.vigia);
+      if (config.internet) falhaTunel('a conexão com a internet caiu');
+    });
+  } catch (e) {
+    falhaTunel(e.message);
+  } finally {
+    tunel.ocupado = false;
+  }
+}
+
+/** Só troca o QR para o endereço da internet depois de ver que ele realmente responde. */
+async function confirmarTunel(p, url) {
+  for (let i = 0; i < 20 && tunel.proc === p; i++) {
+    if (await tunelResponde(url)) {
+      if (tunel.proc !== p) return;
+      tunel.url = url;
+      tunel.estado = 'ativo';
+      tunel.erro = '';
+      tunel.tentativas = 0;
+      tunel.falhas = 0;
+      console.log(`  [internet] pronto: ${url} — o cliente envia pelo 4G/5G, sem o Wi-Fi da loja.`);
+      clearInterval(tunel.vigia);
+      tunel.vigia = setInterval(() => vigiarTunel(p), 90 * 1000);
+      tunel.vigia.unref();
+      return;
+    }
+    await dormir(2000);
+  }
+  if (tunel.proc === p) p.kill(); // não respondeu: o 'exit' agenda uma nova tentativa
+}
+
+/** Confere de tempos em tempos; três falhas seguidas e o túnel é refeito (com endereço novo). */
+async function vigiarTunel(p) {
+  if (tunel.proc !== p || tunel.estado !== 'ativo') return;
+  if (await tunelResponde(tunel.url)) {
+    tunel.falhas = 0;
+    return;
+  }
+  if (++tunel.falhas >= 3 && tunel.proc === p) p.kill();
+}
+
+function pararTunel() {
+  clearTimeout(tunel.religar);
+  clearInterval(tunel.vigia);
+  const p = tunel.proc;
+  tunel.proc = null;
+  tunel.estado = 'desligado';
+  tunel.url = '';
+  tunel.erro = '';
+  tunel.tentativas = 0;
+  if (p) {
+    try {
+      p.kill();
+    } catch {}
+  }
+}
+
 /* ───────────── HTTP ───────────── */
 
 const TIPOS = {
@@ -574,9 +743,18 @@ async function estatico(req, res, caminho) {
   await enviarArquivo(req, res, arquivo, tipo);
 }
 
-/** Rotas da API. Cada entrada: [método, regex, função(req, res, parâmetros, url)]. */
+/**
+ * Rotas da API. Cada entrada: [método, regex, função(req, res, parâmetros, url), pública?].
+ * Só as rotas marcadas como públicas respondem pela porta do túnel (internet): são as que
+ * a página do celular usa. Todo o resto exige a tela do totem ou o PIN do painel.
+ */
+const PUBLICA = true;
 const rotas = [
-  ['GET', /^\/api\/config$/, async (req, res) => json(res, 200, configPublica())],
+  ['GET', /^\/api\/config$/, async (req, res) => {
+    exigirLocal(req); // traz a senha do Wi-Fi da loja: só a tela do totem pode ler
+    json(res, 200, configPublica());
+  }],
+  ['GET', /^\/api\/ping$/, async (req, res) => json(res, 200, { totem: true }), PUBLICA],
 
   /* — sessão: criada pelo totem, alimentada pelo celular — */
   ['POST', /^\/api\/sessoes$/, async (req, res) => {
@@ -584,13 +762,14 @@ const rotas = [
     const id = novoId();
     await fsp.mkdir(dirSessao(id), { recursive: true });
     sessoes.set(id, { id, criada: Date.now(), vista: Date.now(), conectado: false, enviando: 0, fotos: [] });
-    const base = urlBase();
-    json(res, 201, { id, urlEnvio: base ? `${base}/enviar?s=${id}` : '' });
+    json(res, 201, { id, urlEnvio: urlEnvio(id), viaInternet: viaInternet() });
   }],
   ['GET', /^\/api\/sessoes\/([a-f0-9]{24})$/, async (req, res, [id]) => {
     exigirLocal(req);
     const s = pegarSessao(id);
     json(res, 200, {
+      urlEnvio: urlEnvio(id), // muda sozinho quando o túnel conecta ou cai
+      viaInternet: viaInternet(),
       conectado: s.conectado,
       pendentes: s.enviando + s.fotos.filter((f) => !f.pronta).length,
       fotos: s.fotos.filter((f) => f.pronta).map(({ id: fid, nome, w, h }) => ({ id: fid, nome, w, h })),
@@ -605,7 +784,7 @@ const rotas = [
     const s = pegarSessao(id);
     s.conectado = true;
     json(res, 200, { loja: config.loja, maxFotos: config.maxFotos, restantes: Math.max(0, config.maxFotos - s.fotos.length) });
-  }],
+  }, PUBLICA],
   ['POST', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos$/, async (req, res, [id], url) => {
     const s = pegarSessao(id);
     if (s.fotos.length + s.enviando >= config.maxFotos) {
@@ -630,7 +809,7 @@ const rotas = [
     } finally {
       s.enviando--;
     }
-  }],
+  }, PUBLICA],
   ['POST', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos\/([a-f0-9]{16})\/mini$/, async (req, res, [id, fid]) => {
     const s = pegarSessao(id);
     const f = s.fotos.find((x) => x.id === fid);
@@ -641,7 +820,7 @@ const rotas = [
     await receberImagem(req, path.join(dirSessao(id), `${fid}_mini`), MAX_MINI, ['jpg']);
     f.pronta = true;
     json(res, 200, { ok: true });
-  }],
+  }, PUBLICA],
   ['GET', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos\/([a-f0-9]{16})(\/mini)?$/, async (req, res, [id, fid, mini]) => {
     exigirLocal(req);
     const f = pegarSessao(id).fotos.find((x) => x.id === fid);
@@ -716,14 +895,16 @@ const rotas = [
   ['GET', /^\/api\/admin\/config$/, async (req, res) => {
     exigirAdmin(req);
     const { pin, ...resto } = config;
-    json(res, 200, { config: resto, pinPadrao: !pin, enderecos: enderecos(), porta: PORTA, urlBase: urlBase(), pastaPedidos: DIR_PEDIDOS, plataforma: process.platform });
+    json(res, 200, { config: resto, pinPadrao: !pin, enderecos: enderecos(), porta: PORTA, portaInternet: PORTA_INTERNET, urlBase: urlBase(), tunel: estadoTunel(), pastaPedidos: DIR_PEDIDOS, plataforma: process.platform });
   }],
   ['PUT', /^\/api\/admin\/config$/, async (req, res) => {
     exigirAdmin(req);
     config = limparConfig(await lerJsonCorpo(req), config);
     await gravarJson(ARQ_CONFIG, config);
+    if (config.internet) iniciarTunel();
+    else pararTunel();
     const { pin, ...resto } = config;
-    json(res, 200, { config: resto, urlBase: urlBase() });
+    json(res, 200, { config: resto, urlBase: urlBase(), tunel: estadoTunel() });
   }],
   ['POST', /^\/api\/admin\/pin$/, async (req, res) => {
     exigirAdmin(req);
@@ -774,6 +955,7 @@ const rotas = [
     json(res, 200, { ok: true });
     console.log('\nTotem encerrado pelo painel.');
     setTimeout(() => {
+      pararTunel();
       fecharNavegador();
       setTimeout(() => process.exit(0), 400);
     }, 200);
@@ -788,28 +970,37 @@ async function atender(req, res) {
   } catch {
     throw erro(400, 'Endereço inválido.');
   }
+  const externo = ehExterno(req);
   if (caminho.startsWith('/api/')) {
-    for (const [metodo, re, fn] of rotas) {
+    for (const [metodo, re, fn, publica] of rotas) {
       if (req.method !== metodo) continue;
       const m = re.exec(caminho);
-      if (m) return fn(req, res, m.slice(1), url);
+      if (!m) continue;
+      if (externo && !publica) break;
+      return fn(req, res, m.slice(1), url);
     }
-    req.resume();
     throw erro(404, 'Não encontrado.');
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') throw erro(405, 'Método não permitido.');
+  if (externo && !ESTATICO_EXTERNO.test(caminho)) throw erro(404, 'Não encontrado.');
   return estatico(req, res, caminho);
 }
 
-const servidor = http.createServer((req, res) => {
+/** O que a página do celular carrega: ela mesma e seus estilos, scripts, fontes e logo. */
+const ESTATICO_EXTERNO = /^\/(enviar|(css|js|fonts|img)\/[\w.-]+)$/;
+
+function aoPedir(req, res) {
   atender(req, res).catch((e) => {
     const status = e.status || 500;
     if (status >= 500) console.error(`[erro] ${req.method} ${req.url}: ${e.stack || e.message}`);
     if (res.headersSent) return res.destroy();
+    req.resume(); // descarta o que ainda estiver chegando (um envio recusado, por exemplo)
     json(res, status, { erro: status >= 500 ? 'Algo deu errado no totem. Chame um atendente.' : e.message });
   });
-});
-servidor.requestTimeout = 10 * 60 * 1000; // fotos grandes em Wi-Fi lento
+}
+const servidor = http.createServer(aoPedir); // tela do totem e rede local
+const servidorInternet = http.createServer(aoPedir); // só o túnel (127.0.0.1)
+servidor.requestTimeout = servidorInternet.requestTimeout = 10 * 60 * 1000; // fotos grandes em conexão lenta
 
 async function iniciar() {
   await fsp.mkdir(DIR_PEDIDOS, { recursive: true });
@@ -842,16 +1033,22 @@ async function iniciar() {
     console.log(`  Tela do totem:   http://localhost:${PORTA}/`);
     console.log(`  Painel (PIN):    http://localhost:${PORTA}/admin`);
     if (config.enderecoPublico) console.log(`  QR do celular:   ${config.enderecoPublico}`);
-    else if (e.length) console.log(`  QR do celular:   ${e[0].url}  (${e[0].nome})`);
-    else console.log('  QR do celular:   sem rede — conecte o totem ao Wi-Fi para receber fotos do celular');
+    else if (config.internet) console.log('  QR do celular:   pela internet (4G/5G) — conectando o túnel...');
+    else if (e.length) console.log(`  QR do celular:   ${e[0].url}  (${e[0].nome}, mesmo Wi-Fi)`);
+    else console.log('  QR do celular:   sem rede — conecte o totem à internet ou ao Wi-Fi');
     console.log(`  Pedidos salvos:  ${DIR_PEDIDOS}`);
     if (!config.pin) console.log('  PIN do painel:   1234 (troque no painel)');
     console.log('\n  Deixe esta janela aberta. Para encerrar: feche-a ou use o painel.\n');
     if (modo) abrirNavegador(modo);
   });
+  servidorInternet.on('error', (e) => console.log(`[aviso] porta ${PORTA_INTERNET} (internet) indisponível: ${e.message}`));
+  servidorInternet.listen(PORTA_INTERNET, '127.0.0.1', () => {
+    if (config.internet) iniciarTunel();
+  });
 }
 
 function encerrar() {
+  pararTunel();
   fecharNavegador();
   process.exit(0);
 }
@@ -860,4 +1057,4 @@ process.on('SIGTERM', encerrar);
 
 if (require.main === module) iniciar();
 
-module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador };
+module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador, URL_TUNEL };

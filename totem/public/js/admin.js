@@ -115,6 +115,7 @@ async function abrirPainel() {
   $('#faixa-pin').hidden = !dados.pinPadrao;
   $('#teclado').hidden = dados.plataforma !== 'win32';
   montarForm();
+  acompanharTunel();
   montarTeste();
   await carregarPedidos();
 }
@@ -270,9 +271,11 @@ function montarForm() {
     bloco(
       'Receber fotos',
       '',
-      campo('Endereço do QR Code', texto('enderecoPublico', c.enderecoPublico, { placeholder: dados.enderecos[0]?.url || 'automático' }), `Deixe vazio para usar a rede do totem automaticamente. Encontrado: ${rede}. O celular precisa estar no mesmo Wi-Fi.`),
+      chave('internet', 'Receber pelo 4G/5G do cliente (sem Wi-Fi da loja)', c.internet),
+      el('small', { id: 'estado-tunel' }, textoTunel()),
+      campo('Endereço fixo do QR Code (opcional)', texto('enderecoPublico', c.enderecoPublico, { placeholder: 'automático' }), `Só preencha se você tiver um domínio próprio apontando para a porta ${dados.portaInternet} deste computador. Vazio, o totem escolhe sozinho. Rede local encontrada: ${rede}.`),
       el('div', { class: 'dupla' }, campo('Wi-Fi da loja (nome)', texto('wifi.ssid', c.wifi.ssid, { maxlength: '32' })), campo('Senha do Wi-Fi', texto('wifi.senha', c.wifi.senha, { maxlength: '63' }))),
-      el('small', {}, 'Preencha o Wi-Fi para o totem mostrar um segundo QR Code que conecta o celular do cliente à rede.'),
+      el('small', {}, 'O Wi-Fi é o plano B: se o totem ficar sem internet, o QR Code passa a usar a rede da loja e um segundo código conecta o celular do cliente a ela.'),
       chave('pendrive', 'Aceitar pendrive ou cartão', c.pendrive),
     ),
     bloco(
@@ -299,6 +302,7 @@ async function salvar() {
     permitirBorda: v('permitirBorda').checked,
     bordaMm: Number(v('bordaMm').value),
     ociosoSeg: Number(v('ociosoSeg').value),
+    internet: v('internet').checked,
     enderecoPublico: v('enderecoPublico').value,
     wifi: { ssid: v('wifi.ssid').value, senha: v('wifi.senha').value, tipo: v('wifi.senha').value ? 'WPA' : 'nopass' },
     pendrive: v('pendrive').checked,
@@ -319,9 +323,43 @@ async function salvar() {
     $('#faixa-pin').hidden = true;
   }
   dados.config = resp.config;
+  dados.tunel = resp.tunel;
   montarForm();
+  acompanharTunel();
   montarTeste();
   $('#salvo').textContent = `Salvo às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}. Vale a partir do próximo cliente.`;
+}
+
+/* — túnel da internet — */
+
+function textoTunel() {
+  const t = dados.tunel || { estado: 'desligado' };
+  if (dados.config.enderecoPublico) return 'O QR Code usa o endereço fixo informado abaixo.';
+  if (!dados.config.internet) return 'Desligado: o celular do cliente precisa estar no Wi-Fi da loja.';
+  return {
+    ativo: `Funcionando: o QR Code leva para ${t.url}`,
+    conectando: 'Conectando à internet… o QR Code usa o Wi-Fi da loja enquanto isso.',
+    baixando: 'Baixando o programa do túnel (só na primeira vez)…',
+    erro: `Sem conexão no momento (${t.erro}). O totem tenta de novo sozinho e usa o Wi-Fi da loja enquanto isso.`,
+    desligado: 'Ligando…',
+  }[t.estado];
+}
+
+/** Enquanto o túnel está subindo, consulta o estado de novo para atualizar o texto. */
+let relogioTunel = null;
+function acompanharTunel() {
+  clearTimeout(relogioTunel);
+  const alvo = $('#estado-tunel');
+  if (alvo) alvo.textContent = textoTunel();
+  if (!dados.config.internet || dados.tunel?.estado === 'ativo') return;
+  relogioTunel = setTimeout(async () => {
+    try {
+      dados.tunel = (await adm('/api/admin/config')).tunel;
+    } catch {
+      return;
+    }
+    acompanharTunel();
+  }, 3000);
 }
 
 /* — página de teste — */

@@ -51,6 +51,8 @@ export function carregarImagem(src) {
   });
 }
 
+const LADO_MAXIMO = 3600; // px do lado maior de uma foto enviada
+
 const paraBlob = (canvas, tipo = 'image/jpeg', q = 0.9) =>
   new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Não consegui preparar a foto.'))), tipo, q));
 
@@ -74,19 +76,28 @@ export async function prepararFoto(arquivo) {
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.drawImage(img, 0, 0, c.width, c.height);
     const mini = await paraBlob(c, 'image/jpeg', 0.82);
+    // Vai o arquivo original, a não ser que seja maior do que qualquer impressão precisa
+    // (o maior papel, 15x20 em 300 dpi, tem 2400 px) ou esteja num formato que o totem não lê
+    // (HEIC, por exemplo). Nesses casos segue um JPG de até LADO_MAXIMO px: bem mais leve no 4G.
     let original = arquivo;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(arquivo.type)) {
-      const limite = Math.min(1, Math.sqrt(16e6 / (w * h))); // canvas de celular não passa de ~16 MP
+    let envW = w;
+    let envH = h;
+    const aceito = ['image/jpeg', 'image/png', 'image/webp'].includes(arquivo.type);
+    if (!aceito || Math.max(w, h) > LADO_MAXIMO) {
+      const reduz = Math.min(1, LADO_MAXIMO / Math.max(w, h));
       const g = document.createElement('canvas');
-      g.width = Math.round(w * limite);
-      g.height = Math.round(h * limite);
+      g.width = envW = Math.round(w * reduz);
+      g.height = envH = Math.round(h * reduz);
       const gx = g.getContext('2d');
       gx.fillStyle = '#fff';
       gx.fillRect(0, 0, g.width, g.height);
+      gx.imageSmoothingQuality = 'high';
       gx.drawImage(img, 0, 0, g.width, g.height);
-      original = await paraBlob(g, 'image/jpeg', 0.93);
+      const reduzida = await paraBlob(g, 'image/jpeg', 0.92);
+      if (!aceito || reduzida.size < arquivo.size) original = reduzida;
+      else [envW, envH] = [w, h];
     }
-    return { original, mini, w, h, miniUrl: URL.createObjectURL(mini) };
+    return { original, mini, w: envW, h: envH, miniUrl: URL.createObjectURL(mini) };
   } finally {
     URL.revokeObjectURL(url);
   }

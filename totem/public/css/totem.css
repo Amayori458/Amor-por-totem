@@ -81,6 +81,8 @@ img { -webkit-user-drag: none; }
 .envio-passos { display: grid; gap: .7rem; counter-reset: p; font-weight: 600; font-size: 1.15rem; }
 .envio-passos li { counter-increment: p; display: grid; grid-template-columns: 2rem 1fr; gap: .7rem; align-items: start; }
 .envio-passos li::before { content: counter(p); width: 2rem; height: 2rem; border-radius: 50%; display: grid; place-items: center; background: var(--on-turquesa); color: #fff; font-size: .95rem; font-weight: 700; }
+.envio-rede { font-weight: 600; font-size: 1.05rem; opacity: .85; }
+.envio-rede:empty { display: none; }
 .envio-wifi { display: grid; grid-template-columns: 7.5rem 1fr; gap: 1rem; align-items: center; background: #ffffff59; border-radius: var(--radius-lg); padding: 1rem; font-size: 1rem; line-height: 1.4; }
 .qr-pequeno { padding: .5rem; border-radius: var(--radius-md); box-shadow: none; width: 7.5rem; }
 .envio-semrede { background: #ffffff59; border-radius: var(--radius-lg); padding: 1.2rem; font-weight: 600; }
