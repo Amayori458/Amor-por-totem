@@ -57,6 +57,39 @@ const PADRAO = {
     { id: '13x13', nome: '13x13', largura: 127, altura: 127, preco: 0, ativo: true },
     { id: '9x13', nome: '9x13', largura: 89, altura: 127, preco: 0, ativo: true },
   ],
+  // Produtos com gabarito: uma folha (papel 10x15) com janelas onde entram as fotos, e a máscara
+  // do arquivo do Photoshop por cima (public/modelos/*.png). Medidas das janelas em px da máscara.
+  // No painel só mudam nome, preço por unidade e ativo; a geometria vem sempre daqui.
+  modelos: [
+    {
+      id: 'ima',
+      nome: 'Ímã 6,5x9',
+      arquivo: 'ima.png',
+      mascara: { largura: 1772, altura: 1181 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      janelas: [
+        { x: 59, y: 59, l: 768, a: 1063, forma: 'retangulo' },
+        { x: 945, y: 59, l: 768, a: 1063, forma: 'retangulo' },
+      ],
+      preco: 0,
+      ativo: true,
+    },
+    {
+      id: 'bolinha',
+      nome: 'Bolinha de Natal',
+      arquivo: 'bolinhas-de-natal.png',
+      mascara: { largura: 1770, altura: 1180 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      janelas: [
+        { x: 47, y: 167, l: 798, a: 806, forma: 'elipse' },
+        { x: 873, y: 167, l: 798, a: 806, forma: 'elipse' },
+      ],
+      preco: 0,
+      ativo: true,
+    },
+  ],
   mostrarPrecos: false,
   maxFotos: 100,
   maxCopias: 20,
@@ -132,6 +165,21 @@ function limparFormatos(lista, reserva) {
   return saida;
 }
 
+/** Modelos: a lista e a geometria são as do programa; do painel só vêm nome, preço e ativo. */
+function limparModelos(lista, atual) {
+  const veio = Array.isArray(lista) ? lista : [];
+  return PADRAO.modelos.map((base) => {
+    const antes = (atual || []).find((m) => m && m.id === base.id) || base;
+    const novo = veio.find((m) => m && m.id === base.id) || antes;
+    return {
+      ...structuredClone(base),
+      nome: texto(novo.nome, 30) || antes.nome || base.nome,
+      preco: Math.round(numero(novo.preco, 0, 9999, antes.preco || 0) * 100) / 100,
+      ativo: logico(novo.ativo, antes.ativo !== false),
+    };
+  });
+}
+
 function limparEndereco(v) {
   const s = texto(v, 200).replace(/\/+$/, '');
   if (!s) return '';
@@ -153,6 +201,7 @@ function limparConfig(entrada, atual) {
     chamada: texto(e.chamada, 80) || atual.chamada,
     mensagemFinal: texto(e.mensagemFinal, 160, atual.mensagemFinal),
     formatos: limparFormatos(e.formatos, atual.formatos),
+    modelos: limparModelos(e.modelos, atual.modelos),
     mostrarPrecos: logico(e.mostrarPrecos, atual.mostrarPrecos),
     maxFotos: inteiro(e.maxFotos, 1, 500, atual.maxFotos),
     maxCopias: inteiro(e.maxCopias, 1, 99, atual.maxCopias),
@@ -379,13 +428,32 @@ function proximoNumero() {
 async function criarPedido(dados) {
   const itensIn = Array.isArray(dados.itens) ? dados.itens : [];
   if (!itensIn.length) throw erro(400, 'O pedido está vazio.');
-  if (itensIn.length > config.maxFotos) throw erro(400, `O limite é de ${config.maxFotos} fotos por pedido.`);
+  if (itensIn.length > 999) throw erro(400, 'Pedido grande demais.');
   const borda = config.permitirBorda && dados.borda === true;
   const itens = itensIn.map((it, i) => {
+    const n = i + 1;
+    if (it && it.modelo !== undefined) {
+      // uma folha de produto (ímã, bolinha…): o preço é por unidade, ou seja, por janela preenchida
+      const m = config.modelos.find((x) => x.ativo && x.id === it.modelo);
+      if (!m) throw erro(400, 'Produto indisponível.');
+      const unidades = inteiro(it.unidades, 1, m.janelas.length, m.janelas.length);
+      return {
+        n,
+        arquivo: `${String(n).padStart(3, '0')}_${m.id}_${unidades}un.jpg`,
+        nome: '',
+        formato: m.id,
+        formatoNome: m.nome,
+        largura: m.papel.largura,
+        altura: m.papel.altura,
+        copias: 1,
+        unidades,
+        preco: Math.round(m.preco * unidades * 100) / 100,
+        recebido: false,
+      };
+    }
     const f = config.formatos.find((x) => x.ativo && x.id === (it && it.formato));
     if (!f) throw erro(400, 'Tamanho de foto indisponível.');
     const copias = inteiro(it.copias, 1, config.maxCopias, 1);
-    const n = i + 1;
     return {
       n,
       arquivo: `${String(n).padStart(3, '0')}_${f.id}_${copias}x.jpg`,
@@ -409,7 +477,7 @@ async function criarPedido(dados) {
     borda,
     itens,
     totalFotos: itens.length,
-    totalCopias: itens.reduce((s, i) => s + i.copias, 0),
+    totalCopias: itens.reduce((s, i) => s + (i.unidades || i.copias), 0),
     total: Math.round(itens.reduce((s, i) => s + i.copias * i.preco, 0) * 100) / 100,
   };
   await fsp.mkdir(dirPedido(id), { recursive: true });
@@ -475,7 +543,7 @@ function exigirLocal(req) {
 
 function configPublica() {
   const { pin, ...resto } = config;
-  return { ...resto, formatos: config.formatos.filter((f) => f.ativo), urlBase: urlBase(), viaInternet: viaInternet() };
+  return { ...resto, formatos: config.formatos.filter((f) => f.ativo), modelos: config.modelos.filter((m) => m.ativo), urlBase: urlBase(), viaInternet: viaInternet() };
 }
 
 /* ───────────── Navegador do totem ───────────── */
@@ -783,7 +851,8 @@ async function diagnostico() {
 
     if (alvo && !alvo.desligada) {
       const papeis = await papeisDoDriver();
-      const ativos = config.formatos.filter((f) => f.ativo);
+      // os produtos com gabarito usam o papel deles (10x15), então entram na mesma conferência
+      const ativos = [...config.formatos.filter((f) => f.ativo), ...config.modelos.filter((m) => m.ativo).map((m) => ({ nome: m.nome, largura: m.papel.largura, altura: m.papel.altura }))];
       if (!papeis) {
         item('Papel de cada tamanho', 'aviso', 'Não consegui ler os papéis do driver. O totem vai imprimir pelo navegador, no papel definido nas preferências do driver.', 'Imprima a página de teste para conferir.');
       } else {

@@ -148,7 +148,8 @@ export function ehPaisagem(foto) {
 
 /** Moldura em mm: o papel deitado ou em pé, e a área útil descontando a borda branca. */
 export function moldura(formato, foto, bordaMm = 0) {
-  const deitada = ehPaisagem(foto);
+  // produtos com gabarito (ímã, bolinha) têm janela de orientação fixa; fotos comuns seguem a foto
+  const deitada = formato.deitadaFixa ?? ehPaisagem(foto);
   const largura = deitada ? formato.altura : formato.largura;
   const altura = deitada ? formato.largura : formato.altura;
   const b = Math.min(bordaMm, largura / 4);
@@ -186,7 +187,7 @@ export function dpiEfetivo(foto, formato, bordaMm = 0) {
  * Desenha a foto enquadrada numa área de W x H pixels com canto em (x, y).
  * `img` pode ser a miniatura ou o original: só a proporção importa.
  */
-export function desenharFoto(ctx, img, foto, x, y, W, H) {
+export function desenharFoto(ctx, img, foto, x, y, W, H, forma = 'retangulo') {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   const [ew, eh] = dimsGiradas(iw, ih, foto.giro);
@@ -194,7 +195,8 @@ export function desenharFoto(ctx, img, foto, x, y, W, H) {
   const s = base * (foto.modo === 'inteira' ? 1 : foto.zoom);
   ctx.save();
   ctx.beginPath();
-  ctx.rect(x, y, W, H);
+  if (forma === 'elipse') ctx.ellipse(x + W / 2, y + H / 2, W / 2, H / 2, 0, 0, Math.PI * 2);
+  else ctx.rect(x, y, W, H);
   ctx.clip();
   ctx.fillStyle = '#fff';
   ctx.fillRect(x, y, W, H);
@@ -217,7 +219,15 @@ export function pintarPrevia(canvas, img, foto, formato, bordaMm, larguraPx) {
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  desenharFoto(ctx, img, foto, m.borda * px, m.borda * px, canvas.width - 2 * m.borda * px, canvas.height - 2 * m.borda * px);
+  desenharFoto(ctx, img, foto, m.borda * px, m.borda * px, canvas.width - 2 * m.borda * px, canvas.height - 2 * m.borda * px, formato.forma);
+  if (formato.forma === 'elipse') {
+    // contorno fino para a janela redonda aparecer sobre o papel branco
+    ctx.strokeStyle = '#6b8f8d';
+    ctx.lineWidth = Math.max(1, canvas.width / 300);
+    ctx.beginPath();
+    ctx.ellipse(canvas.width / 2, canvas.height / 2, canvas.width / 2 - ctx.lineWidth / 2, canvas.height / 2 - ctx.lineWidth / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   return m;
 }
 
@@ -246,6 +256,77 @@ export async function renderizarImpressao(img, foto, formato, bordaMm, dpi) {
   }
   const b = m.borda * mm;
   desenharFoto(ctx, img, foto, b, b, W - 2 * b, H - 2 * b);
+  return paraBlob(c, 'image/jpeg', 0.95);
+}
+
+/* ───────────── Produtos com gabarito (ímã, bolinha de Natal…) ─────────────
+ * Um modelo é uma folha com janelas: { folha:{largura,altura} em mm, mascara:{largura,altura} em px,
+ * janelas:[{x,y,l,a,forma}] em px da máscara, papel:{largura,altura} em mm }. A máscara é um PNG
+ * branco com as janelas transparentes, exportado do arquivo do Photoshop.
+ */
+
+/** Transforma um modelo num "tamanho" que o resto da tela entende: a moldura é uma janela do gabarito. */
+export function formatoDoModelo(modelo) {
+  const mmPorPx = modelo.folha.largura / modelo.mascara.largura;
+  const j = modelo.janelas[0];
+  const l = j.l * mmPorPx;
+  const a = j.a * mmPorPx;
+  return {
+    id: modelo.id,
+    nome: modelo.nome,
+    preco: modelo.preco,
+    largura: Math.min(l, a),
+    altura: Math.max(l, a),
+    deitadaFixa: l > a,
+    forma: j.forma,
+    modelo,
+  };
+}
+
+/** Distribui as unidades (uma foto por janela) em folhas: [[u1,u2],[u3,…]]. */
+export function dividirEmFolhas(unidades, porFolha) {
+  const folhas = [];
+  for (let i = 0; i < unidades.length; i += porFolha) folhas.push(unidades.slice(i, i + porFolha));
+  return folhas;
+}
+
+/**
+ * Gera a folha de impressão de um modelo: cada foto na posição e no tamanho da sua janela,
+ * com a máscara do gabarito por cima, em tamanho real (a folha fica centralizada no papel).
+ * `unidades` = [{ img, foto }] na ordem das janelas; janela sem foto fica branca.
+ */
+export async function renderizarFolha(modelo, mascara, unidades, dpi) {
+  const mm = dpi / 25.4;
+  const P = { w: Math.round(modelo.papel.largura * mm), h: Math.round(modelo.papel.altura * mm) };
+  const c = document.createElement('canvas');
+  c.width = P.w;
+  c.height = P.h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, P.w, P.h);
+  let W = P.w;
+  let H = P.h;
+  if (modelo.folha.largura > modelo.folha.altura) {
+    // folha deitada num papel que o driver define em pé
+    ctx.translate(P.w, 0);
+    ctx.rotate(Math.PI / 2);
+    W = P.h;
+    H = P.w;
+  }
+  const px = (modelo.folha.largura * mm) / modelo.mascara.largura; // px do papel por px da máscara
+  const fw = modelo.mascara.largura * px;
+  const fh = modelo.mascara.altura * px;
+  const ox = (W - fw) / 2;
+  const oy = (H - fh) / 2;
+  modelo.janelas.forEach((j, i) => {
+    const u = unidades[i];
+    if (!u) return;
+    // 1 px de sobra de cada lado para a máscara cobrir a emenda; quem dá a forma é a máscara
+    desenharFoto(ctx, u.img, u.foto, ox + (j.x - 1) * px, oy + (j.y - 1) * px, (j.l + 2) * px, (j.a + 2) * px);
+  });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(mascara, ox, oy, fw, fh);
   return paraBlob(c, 'image/jpeg', 0.95);
 }
 

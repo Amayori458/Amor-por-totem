@@ -220,3 +220,45 @@ test('impressão direta: papel pela medida e leitura da resposta do Windows', as
     assert.equal((await req('/api/admin/diagnostico')).status, 401);
   }
 });
+
+test('produtos com gabarito: ímã e bolinha entram no pedido como folhas, com preço por unidade', async () => {
+  const cfg0 = (await req('/api/config')).dados;
+  assert.deepEqual(cfg0.modelos.map((m) => [m.id, m.janelas.length, m.janelas[0].forma]), [['ima', 2, 'retangulo'], ['bolinha', 2, 'elipse']]);
+  // as janelas cabem dentro da máscara e o arquivo da máscara existe
+  for (const m of cfg0.modelos) {
+    for (const j of m.janelas) {
+      assert.ok(j.x >= 0, m.id);
+      assert.ok(j.y >= 0, m.id);
+      assert.ok(j.x + j.l <= m.mascara.largura, m.id);
+      assert.ok(j.y + j.a <= m.mascara.altura, m.id);
+    }
+    assert.equal((await req(`/modelos/${m.arquivo}`)).status, 200);
+  }
+  // ímã: janelas de 65 x 90 mm
+  const ima = cfg0.modelos[0];
+  const mm = ima.folha.largura / ima.mascara.largura;
+  assert.equal(Math.round(ima.janelas[0].l * mm), 65);
+  assert.equal(Math.round(ima.janelas[0].a * mm), 90);
+
+  const { token } = (await req('/api/admin/entrar', { metodo: 'POST', corpo: { pin: '864213' } })).dados;
+  const cfg = (await req('/api/admin/config', { admin: token })).dados.config;
+  cfg.modelos = [{ id: 'ima', nome: 'Ímã de geladeira', preco: 4, ativo: true, janelas: [] }, { id: 'bolinha', ativo: false }, { id: 'intruso', nome: 'x' }];
+  const salvo = (await req('/api/admin/config', { metodo: 'PUT', admin: token, corpo: cfg })).dados.config;
+  assert.deepEqual(salvo.modelos.map((m) => [m.id, m.nome, m.preco, m.ativo, m.janelas.length]), [['ima', 'Ímã de geladeira', 4, true, 2], ['bolinha', 'Bolinha de Natal', 0, false, 2]]);
+
+  // 3 ímãs = 1 folha cheia + 1 folha com uma janela; mais 2 fotos 10x15 a 2,50
+  const p = (await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '10x15', copias: 2 }, { modelo: 'ima', unidades: 2 }, { modelo: 'ima', unidades: 1 }] } })).dados;
+  assert.equal(p.total, 2 * 2.5 + 3 * 4);
+  assert.equal((await req(`/api/pedidos/${p.id}/itens/2`, { metodo: 'PUT', bruto: JPG })).status, 200);
+  const gravado = (await req('/api/admin/pedidos', { admin: token })).dados.pedidos.find((x) => x.id === p.id);
+  assert.deepEqual(gravado.itens.map((i) => [i.arquivo, i.formatoNome, i.largura, i.altura, i.unidades || 0]), [
+    ['001_10x15_2x.jpg', '10x15', 102, 152, 0],
+    ['002_ima_2un.jpg', 'Ímã de geladeira', 102, 152, 2],
+    ['003_ima_1un.jpg', 'Ímã de geladeira', 102, 152, 1],
+  ]);
+  assert.equal(gravado.totalCopias, 5);
+  // produto desligado ou inexistente é recusado; unidades nunca passam do número de janelas
+  assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: 'bolinha', unidades: 2 }] } })).status, 400);
+  assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: 'intruso', unidades: 1 }] } })).status, 400);
+  assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: 'ima', unidades: 99 }] } })).dados.total, 8);
+});

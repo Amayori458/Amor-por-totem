@@ -2,6 +2,7 @@
 import {
   $, $$, el, api, brl, plural, carregarImagem, prepararFoto, enviarFoto, novoAjuste, dimsGiradas, ehPaisagem,
   moldura, limitarAjuste, dpiEfetivo, pintarPrevia, renderizarImpressao, qrSvg, textoWifi,
+  formatoDoModelo, dividirEmFolhas, renderizarFolha,
 } from './comum.js';
 import { icone, aplicarIcones } from './icones.js';
 import { imprimirPedido } from './imprimir.js';
@@ -25,13 +26,14 @@ const E = {
 /* ───────────── utilidades ───────────── */
 
 const formatoDe = (foto) => E.cfg.formatos.find((f) => f.id === foto.formato) || E.cfg.formatos[0];
-const bordaAtual = () => (E.borda && E.cfg.permitirBorda ? E.cfg.bordaMm : 0);
+// borda branca só existe em foto comum; nos produtos com gabarito quem manda é a janela
+const bordaDe = (foto) => (E.borda && E.cfg.permitirBorda && !formatoDe(foto).modelo ? E.cfg.bordaMm : 0);
 const urlOriginal = (foto) => `/api/sessoes/${E.sessao.id}/fotos/${foto.id}`;
 const urlMini = (foto) => `${urlOriginal(foto)}/mini`;
 const tocou = () => (E.ultimoToque = Date.now());
 
 function ajustarLimites(foto) {
-  const m = moldura(formatoDe(foto), foto, bordaAtual());
+  const m = moldura(formatoDe(foto), foto, bordaDe(foto));
   limitarAjuste(foto, m.util[0], m.util[1]);
   return m;
 }
@@ -132,7 +134,11 @@ async function carregarConfig() {
   document.title = `${E.cfg.loja} — Totem`;
   $('#chamada').textContent = E.cfg.chamada;
   for (const img of $$('.inicio-logo, .topo-logo')) img.alt = E.cfg.loja;
+  // ímã, bolinha de Natal…: cada modelo vira um "tamanho" cuja moldura é uma janela do gabarito
+  const modelos = (E.cfg.modelos || []).map(formatoDoModelo);
+  E.cfg.formatos = [...E.cfg.formatos, ...modelos];
   E.formato = E.cfg.formatos[0].id;
+  $('#rotulo-tamanhos').textContent = modelos.length ? 'Tamanho ou produto de todas' : 'Tamanho de todas';
   $('#bloco-pendrive').hidden = !E.cfg.pendrive;
   $('#bloco-borda').hidden = !E.cfg.permitirBorda || !(E.cfg.bordaMm > 0);
   $('#bloco-tamanhos').hidden = E.cfg.formatos.length < 2;
@@ -360,10 +366,10 @@ function cartao(foto) {
   foto.cartao = raiz;
   foto.pintarCartao = () => {
     const f = formatoDe(foto);
-    pintarPrevia(canvas, foto.mini, foto, f, bordaAtual(), 420);
+    pintarPrevia(canvas, foto.mini, foto, f, bordaDe(foto), 420);
     selo.textContent = f.nome;
     selo.hidden = E.cfg.formatos.length < 2;
-    alerta.hidden = dpiEfetivo(foto, f, bordaAtual()) >= DPI_MINIMO;
+    alerta.hidden = dpiEfetivo(foto, f, bordaDe(foto)) >= DPI_MINIMO;
     qtd.definir(foto.copias);
   };
   foto.pintarCartao();
@@ -406,13 +412,15 @@ function abrirEditor(foto) {
     const cssW = Math.floor(m.largura * escala);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${Math.floor(m.altura * escala)}px`;
-    pintarPrevia(canvas, img, foto, f, bordaAtual(), Math.min(1800, cssW * (window.devicePixelRatio || 1)));
+    pintarPrevia(canvas, img, foto, f, bordaDe(foto), Math.min(1800, cssW * (window.devicePixelRatio || 1)));
     canvas.classList.toggle('arrastavel', foto.modo === 'preencher');
-    alerta.hidden = dpiEfetivo(foto, f, bordaAtual()) >= DPI_MINIMO;
+    alerta.hidden = dpiEfetivo(foto, f, bordaDe(foto)) >= DPI_MINIMO;
     modoPreencher.setAttribute('aria-pressed', String(foto.modo === 'preencher'));
     modoInteira.setAttribute('aria-pressed', String(foto.modo === 'inteira'));
     zoom.value = String(foto.zoom);
     zoom.disabled = foto.modo === 'inteira';
+    botaoPapel.hidden = f.deitadaFixa != null; // a janela do gabarito tem orientação fixa
+    modoPreencher.textContent = f.modelo ? 'Preencher a janela' : 'Preencher o papel';
     chipsTamanho(chips, foto.formato, (novo) => {
       foto.formato = novo.id;
       pintar();
@@ -430,7 +438,7 @@ function abrirEditor(foto) {
     if (!antes || foto.modo !== 'preencher') return;
     const agora = { x: e.clientX, y: e.clientY };
     if (dedos.size === 1) {
-      const m = moldura(formatoDe(foto), foto, bordaAtual());
+      const m = moldura(formatoDe(foto), foto, bordaDe(foto));
       const pxMm = canvas.clientWidth / m.largura;
       const [ew, eh] = dimsGiradas(foto.w, foto.h, foto.giro);
       const s = Math.max((m.util[0] * pxMm) / ew, (m.util[1] * pxMm) / eh) * foto.zoom;
@@ -460,12 +468,19 @@ function abrirEditor(foto) {
     pintar();
   });
 
+  const botaoPapel = botao('Papel em pé ou deitado', {
+    iconeNome: 'trocar',
+    onclick: () => {
+      foto.paisagem = !ehPaisagem(foto);
+      pintar();
+    },
+  });
   const grupo = (rotulo, ...filhos) => el('div', { class: 'editor-grupo' }, el('span', { class: 'rotulo' }, rotulo), ...filhos);
   const painel = el(
     'div',
     { class: 'editor-painel' },
     el('h2', { class: 't-heading' }, 'Ajustar foto'),
-    E.cfg.formatos.length > 1 && grupo('Tamanho', chips),
+    E.cfg.formatos.length > 1 && grupo(E.cfg.formatos.some((f) => f.modelo) ? 'Tamanho ou produto' : 'Tamanho', chips),
     grupo('Enquadramento', el('div', { class: 'chips' }, modoPreencher, modoInteira)),
     grupo('Zoom', zoom),
     grupo(
@@ -482,13 +497,7 @@ function abrirEditor(foto) {
             pintar();
           },
         }),
-        botao('Papel em pé ou deitado', {
-          iconeNome: 'trocar',
-          onclick: () => {
-            foto.paisagem = !ehPaisagem(foto);
-            pintar();
-          },
-        }),
+        botaoPapel,
       ),
     ),
     grupo('Cópias', qtd),
@@ -558,10 +567,19 @@ function confirmarPedido() {
   }
   const total = [...porFormato.values()].reduce((s, g) => s + g.copias * g.fmt.preco, 0);
   const comPreco = E.cfg.mostrarPrecos && total > 0;
-  const linhas = [...porFormato.values()].map((g) =>
-    el('tr', {}, el('th', { scope: 'row' }, g.fmt.nome), el('td', {}, plural(g.copias, 'cópia', 'cópias')), comPreco && el('td', { class: 'num' }, brl(g.copias * g.fmt.preco))),
-  );
-  const baixas = E.fotos.filter((f) => dpiEfetivo(f, formatoDe(f), bordaAtual()) < DPI_MINIMO).length;
+  const sobras = [];
+  const linhas = [...porFormato.values()].map((g) => {
+    let quanto = plural(g.copias, 'cópia', 'cópias');
+    if (g.fmt.modelo) {
+      const porFolha = g.fmt.modelo.janelas.length;
+      const folhas = Math.ceil(g.copias / porFolha);
+      quanto = `${plural(g.copias, 'unidade', 'unidades')} · ${plural(folhas, 'folha', 'folhas')}`;
+      const vazios = folhas * porFolha - g.copias;
+      if (vazios) sobras.push(`${g.fmt.nome}: ${plural(vazios, 'espaço fica', 'espaços ficam')} em branco na última folha (cabem ${porFolha} por folha).`);
+    }
+    return el('tr', {}, el('th', { scope: 'row' }, g.fmt.nome), el('td', {}, quanto), comPreco && el('td', { class: 'num' }, brl(g.copias * g.fmt.preco)));
+  });
+  const baixas = E.fotos.filter((f) => dpiEfetivo(f, formatoDe(f), bordaDe(f)) < DPI_MINIMO).length;
   const m = abrirModal(
     el(
       'div',
@@ -569,7 +587,8 @@ function confirmarPedido() {
       el('h2', { class: 't-title' }, 'Tudo certo para revelar?'),
       el('table', { class: 'resumo' }, el('tbody', {}, linhas), comPreco && el('tfoot', {}, el('tr', {}, el('th', { scope: 'row' }, 'Total'), el('td', {}), el('td', { class: 'num' }, brl(total))))),
       comPreco && el('p', { class: 'pequeno' }, 'O pagamento é feito no balcão, na retirada.'),
-      E.borda && bordaAtual() > 0 && el('p', { class: 'pequeno' }, 'Com borda branca.'),
+      E.fotos.some((f) => bordaDe(f) > 0) && el('p', { class: 'pequeno' }, 'Fotos com borda branca.'),
+      sobras.map((t) => el('p', { class: 'pequeno' }, t)),
       baixas > 0 && el('p', { class: 'editor-alerta' }, icone('alerta'), el('span', {}, `${plural(baixas, 'foto tem', 'fotos têm')} baixa resolução e ${baixas === 1 ? 'pode' : 'podem'} sair sem nitidez.`)),
       el(
         'div',
@@ -601,8 +620,24 @@ function progresso(fracao, titulo, texto) {
 async function revelar() {
   if (E.ocupado || !E.fotos.length) return;
   E.ocupado = true;
-  const fotos = [...E.fotos];
-  const n = fotos.length;
+  // plano de impressão: cada foto comum é um arquivo; as unidades de cada produto (uma por
+  // janela, repetidas conforme as cópias) são agrupadas em folhas do gabarito
+  const plano = [];
+  const porModelo = new Map();
+  for (const f of E.fotos) {
+    const fmt = formatoDe(f);
+    if (!fmt.modelo) {
+      plano.push({ fmt, foto: f });
+      continue;
+    }
+    const lista = porModelo.get(fmt.id) || { fmt, unidades: [] };
+    for (let c = 0; c < f.copias; c++) lista.unidades.push(f);
+    porModelo.set(fmt.id, lista);
+  }
+  for (const { fmt, unidades } of porModelo.values()) {
+    for (const folha of dividirEmFolhas(unidades, fmt.modelo.janelas.length)) plano.push({ fmt, folha });
+  }
+  const n = plano.length;
   const pesoPreparo = E.cfg.imprimir ? 0.7 : 1;
   const urls = [];
   irPara('imprimindo');
@@ -610,22 +645,43 @@ async function revelar() {
   try {
     const pedido = await api('/api/pedidos', {
       metodo: 'POST',
-      corpo: { borda: E.borda, itens: fotos.map((f) => ({ formato: f.formato, copias: f.copias, nome: f.nome })) },
+      corpo: {
+        borda: E.borda,
+        itens: plano.map((p) => (p.folha ? { modelo: p.fmt.id, unidades: p.folha.length } : { formato: p.fmt.id, copias: p.foto.copias, nome: p.foto.nome })),
+      },
     });
     const grupos = new Map();
-    for (const [i, f] of fotos.entries()) {
-      progresso((i / n) * pesoPreparo, null, `Foto ${i + 1} de ${n}`);
-      const fmt = formatoDe(f);
-      let original = await carregarImagem(urlOriginal(f));
-      const blob = await renderizarImpressao(original, f, fmt, bordaAtual(), E.cfg.dpi);
-      original.src = '';
-      original = null;
+    const mascaras = new Map();
+    for (const [i, p] of plano.entries()) {
+      progresso((i / n) * pesoPreparo, null, `${p.folha ? 'Folha' : 'Foto'} ${i + 1} de ${n}`);
+      let blob;
+      let papel = p.fmt;
+      let vezes = 1;
+      if (p.folha) {
+        const modelo = p.fmt.modelo;
+        if (!mascaras.has(modelo.id)) mascaras.set(modelo.id, await carregarImagem(`/modelos/${modelo.arquivo}`));
+        const originais = new Map(); // a mesma foto pode ocupar as duas janelas
+        const unidades = [];
+        for (const f of p.folha) {
+          if (!originais.has(f.id)) originais.set(f.id, await carregarImagem(urlOriginal(f)));
+          unidades.push({ img: originais.get(f.id), foto: f });
+        }
+        blob = await renderizarFolha(modelo, mascaras.get(modelo.id), unidades, E.cfg.dpi);
+        for (const img of originais.values()) img.src = '';
+        papel = { id: modelo.id, largura: modelo.papel.largura, altura: modelo.papel.altura };
+      } else {
+        let original = await carregarImagem(urlOriginal(p.foto));
+        blob = await renderizarImpressao(original, p.foto, p.fmt, bordaDe(p.foto), E.cfg.dpi);
+        original.src = '';
+        original = null;
+        vezes = p.foto.copias;
+      }
       await api(`/api/pedidos/${pedido.id}/itens/${i + 1}`, { metodo: 'PUT', bruto: blob });
       const url = URL.createObjectURL(blob);
       urls.push(url);
-      const g = grupos.get(fmt.id) || { formato: fmt, folhas: [] };
-      for (let c = 0; c < f.copias; c++) g.folhas.push(url);
-      grupos.set(fmt.id, g);
+      const g = grupos.get(papel.id) || { formato: papel, folhas: [] };
+      for (let c = 0; c < vezes; c++) g.folhas.push(url);
+      grupos.set(papel.id, g);
       tocou();
     }
     let via = '';

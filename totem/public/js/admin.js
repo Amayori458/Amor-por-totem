@@ -154,7 +154,7 @@ async function carregarPedidos() {
   }
   const porTamanho = (p) => {
     const m = new Map();
-    for (const i of p.itens) m.set(i.formatoNome, (m.get(i.formatoNome) || 0) + i.copias);
+    for (const i of p.itens) m.set(i.formatoNome, (m.get(i.formatoNome) || 0) + (i.unidades || i.copias));
     return [...m].map(([nome, n]) => `${n}× ${nome}`).join(' · ');
   };
   tabela.replaceChildren(
@@ -256,8 +256,38 @@ function montarForm() {
       'Tamanhos de foto',
       'largo',
       el('small', {}, 'Todos os tamanhos vêm ativos. Desative os que o papel carregado na impressora não consegue fazer. O primeiro da lista é o tamanho inicial das fotos. Medidas do papel em milímetros (lado menor primeiro).'),
-      el('table', { class: 'formatos' }, el('thead', {}, el('tr', {}, ...['Ativo', 'Nome', 'Largura (mm)', 'Altura (mm)', 'Preço (R$)', ''].map((t) => el('th', {}, t)))), corpo),
+      el('table', { class: 'formatos', id: 'tabela-formatos' }, el('thead', {}, el('tr', {}, ...['Ativo', 'Nome', 'Largura (mm)', 'Altura (mm)', 'Preço (R$)', ''].map((t) => el('th', {}, t)))), corpo),
       el('div', {}, botao('Adicionar tamanho', { iconeNome: 'mais', onclick: () => corpo.append(linhaFormato({ nome: '', largura: 102, altura: 152, preco: 0, ativo: true })) })),
+    ),
+    bloco(
+      'Produtos com foto',
+      'largo',
+      el('small', {}, 'Cada foto ocupa uma janela do gabarito e o cliente ajusta a posição e o zoom. Saem 2 por folha de papel 10x15 (rolo de 6"); o preço é por unidade.'),
+      el(
+        'table',
+        { class: 'formatos', id: 'tabela-modelos' },
+        el('thead', {}, el('tr', {}, ...['Ativo', 'Nome', 'Janela', 'Preço por unidade (R$)'].map((t) => el('th', {}, t)))),
+        el(
+          'tbody',
+          {},
+          (c.modelos || []).map((m) => {
+            const mm = m.folha.largura / m.mascara.largura;
+            const j = m.janelas[0];
+            const cm = (v) => ((v * mm) / 10).toFixed(1).replace('.', ',');
+            const medida = `${cm(j.l)} × ${cm(j.a)} cm${j.forma === 'elipse' ? ' (redonda)' : ''}`;
+            const tr = el(
+              'tr',
+              {},
+              el('td', {}, el('input', { type: 'checkbox', 'data-m': 'ativo', checked: m.ativo, 'aria-label': 'Ativo' })),
+              el('td', {}, el('input', { type: 'text', 'data-m': 'nome', value: m.nome, maxlength: '30', 'aria-label': 'Nome' })),
+              el('td', {}, `${m.janelas.length} de ${medida}`),
+              el('td', {}, el('input', { type: 'number', 'data-m': 'preco', value: String(m.preco), min: '0', step: '0.01', 'aria-label': 'Preço por unidade' })),
+            );
+            tr.dataset.id = m.id;
+            return tr;
+          }),
+        ),
+      ),
     ),
     bloco(
       'Loja',
@@ -330,7 +360,11 @@ async function salvar() {
     modoImpressao: v('modoImpressao').value,
     dpi: Number(v('dpi').value),
     diasGuardar: Number(v('diasGuardar').value),
-    formatos: $$('.formatos tbody tr', f).map((tr) => {
+    modelos: $$('#tabela-modelos tbody tr', f).map((tr) => {
+      const c = (n) => $(`[data-m="${n}"]`, tr);
+      return { id: tr.dataset.id, nome: c('nome').value, preco: Number(c('preco').value), ativo: c('ativo').checked };
+    }),
+    formatos: $$('#tabela-formatos tbody tr', f).map((tr) => {
       const c = (n) => $(`[data-f="${n}"]`, tr);
       return { id: tr.dataset.id, nome: c('nome').value, largura: Number(c('largura').value), altura: Number(c('altura').value), preco: Number(c('preco').value), ativo: c('ativo').checked };
     }),
