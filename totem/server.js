@@ -59,7 +59,9 @@ const PADRAO = {
   ],
   // Produtos com gabarito: uma folha (papel 10x15) com janelas onde entram as fotos, e a máscara
   // do arquivo do Photoshop por cima (public/modelos/*.png). Medidas das janelas em px da máscara.
-  // No painel só mudam nome, preço por unidade e ativo; a geometria vem sempre daqui.
+  // No painel só mudam nome, preço e ativo; a geometria vem sempre daqui.
+  // repetir: true = a mesma foto preenche todas as janelas da folha (foto de documento) e o
+  // preço é por folha. Sem repetir, cada foto ocupa uma janela e o preço é por unidade.
   modelos: [
     {
       id: 'ima',
@@ -85,6 +87,34 @@ const PADRAO = {
       janelas: [
         { x: 47, y: 167, l: 798, a: 806, forma: 'elipse' },
         { x: 873, y: 167, l: 798, a: 806, forma: 'elipse' },
+      ],
+      preco: 0,
+      ativo: true,
+    },
+    {
+      id: '3x4-8',
+      nome: '3x4 com 8 fotos',
+      arquivo: '3x4-com-8.png',
+      repetir: true,
+      mascara: { largura: 1772, altura: 1181 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      janelas: [14, 447, 900, 1333].flatMap((x) => [36, 607].map((y) => ({ x, y, l: 413, a: 531, forma: 'retangulo' }))),
+      preco: 0,
+      ativo: true,
+    },
+    {
+      id: '3x4-5x7',
+      nome: '3x4 + 5x7',
+      arquivo: '3x4-5x7.png',
+      repetir: true,
+      mascara: { largura: 1772, altura: 1181 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      // a primeira janela é a que o cliente vê ao ajustar (3x4); a grande ocupa a metade direita
+      janelas: [
+        ...[14, 447].flatMap((x) => [36, 607].map((y) => ({ x, y, l: 413, a: 531, forma: 'retangulo' }))),
+        { x: 886, y: 0, l: 886, a: 1181, forma: 'retangulo' },
       ],
       preco: 0,
       ativo: true,
@@ -433,9 +463,25 @@ async function criarPedido(dados) {
   const itens = itensIn.map((it, i) => {
     const n = i + 1;
     if (it && it.modelo !== undefined) {
-      // uma folha de produto (ímã, bolinha…): o preço é por unidade, ou seja, por janela preenchida
       const m = config.modelos.find((x) => x.ativo && x.id === it.modelo);
       if (!m) throw erro(400, 'Produto indisponível.');
+      if (m.repetir) {
+        // foto de documento: a mesma foto em todas as janelas; cópias = folhas, preço por folha
+        const folhas = inteiro(it.copias, 1, config.maxCopias, 1);
+        return {
+          n,
+          arquivo: `${String(n).padStart(3, '0')}_${m.id}_${folhas}x.jpg`,
+          nome: texto(it.nome, 120),
+          formato: m.id,
+          formatoNome: m.nome,
+          largura: m.papel.largura,
+          altura: m.papel.altura,
+          copias: folhas,
+          preco: m.preco,
+          recebido: false,
+        };
+      }
+      // folha de ímã, bolinha…: o preço é por unidade, ou seja, por janela preenchida
       const unidades = inteiro(it.unidades, 1, m.janelas.length, m.janelas.length);
       return {
         n,

@@ -42,21 +42,24 @@ Se um cliente pedir dois tamanhos no mesmo pedido, o totem manda um trabalho de 
 
 Prefere imprimir por outro programa? Desligue *Imprimir automaticamente* no painel: o totem só grava as fotos prontas em `dados\pedidos\<data>_<número>\`, uma por arquivo, com o tamanho e o número de cópias no nome (`001_10x15_2x.jpg`).
 
-## Produtos com foto: ímã e bolinha de Natal
+## Produtos com foto: ímã, bolinha de Natal e foto 3x4
 
-Além das fotos comuns, o cliente pode escolher dois produtos na mesma lista dos tamanhos:
+Além das fotos comuns, o cliente pode escolher quatro produtos na mesma lista dos tamanhos. Todos saem em folha 10x15 (rolo de 6"):
 
-| Produto | Janela da foto | Por folha 10x15 |
-| --- | --- | --- |
-| Ímã 6,5x9 | retangular, 65 × 90 mm | 2 |
-| Bolinha de Natal | redonda, cerca de 68 mm | 2 |
+| Produto | Janelas na folha | Como funciona | Preço |
+| --- | --- | --- | --- |
+| Ímã 6,5x9 | 2 retangulares de 65 × 90 mm | uma foto por janela | por unidade |
+| Bolinha de Natal | 2 redondas de cerca de 68 mm | uma foto por janela | por unidade |
+| 3x4 com 8 fotos | 8 de 35 × 45 mm | a mesma foto nas 8 janelas | por folha |
+| 3x4 + 5x7 | 4 de 35 × 45 mm + 1 de 75 × 100 mm | a mesma foto nas 5 janelas | por folha |
 
-- **Cada foto ocupa uma janela.** O cliente toca na foto e ajusta a posição (arrastando) e o tamanho (zoom) já no formato da janela — retangular ou redonda.
-- **Cópias = unidades.** Para a mesma foto nos dois lados de uma bolinha, basta pedir 2 cópias.
-- O totem junta as unidades de 2 em 2 e monta a folha com o gabarito por cima, em tamanho real. Se o número for ímpar, uma janela da última folha sai em branco (a tela avisa antes de revelar).
-- Os produtos usam papel 10x15 (rolo de 6"). Nome, preço por unidade e ligar/desligar ficam no painel, em *Configurações → Produtos com foto*.
+- O cliente toca na foto e ajusta a posição (arrastando) e o tamanho (zoom) já no formato da janela — retangular ou redonda.
+- **Ímã e bolinha:** cada foto ocupa uma janela e cópias = unidades (para a mesma foto nos dois lados de uma bolinha, basta pedir 2 cópias). O totem junta as unidades de 2 em 2; se o número for ímpar, uma janela da última folha sai em branco, e a tela avisa antes de revelar.
+- **Fotos 3x4:** o enquadramento é ajustado uma vez e vale para a folha inteira; cópias = folhas. O cartão do pedido mostra a folha montada.
+- O totem monta cada folha com o gabarito por cima, em tamanho real.
+- Nome, preço e ligar/desligar ficam no painel, em *Configurações → Produtos com foto*.
 
-Os gabaritos vieram dos arquivos do Photoshop (`ima.psd` e `bolinhas_de_natal.psd`) e estão em `public/modelos/` como PNG; as posições das janelas ficam em `server.js` (`PADRAO.modelos`), em pixels da máscara.
+Os gabaritos vieram dos arquivos do Photoshop e estão em `public/modelos/` como PNG (a imagem do PSD sem alterações); as posições das janelas ficam em `server.js` (`PADRAO.modelos`), em pixels da máscara.
 
 ## Fotos pelo celular (4G/5G, sem Wi-Fi da loja)
 

@@ -262,11 +262,11 @@ function montarForm() {
     bloco(
       'Produtos com foto',
       'largo',
-      el('small', {}, 'Cada foto ocupa uma janela do gabarito e o cliente ajusta a posição e o zoom. Saem 2 por folha de papel 10x15 (rolo de 6"); o preço é por unidade.'),
+      el('small', {}, 'O cliente ajusta a posição e o zoom da foto na janela do gabarito. Todos usam papel 10x15 (rolo de 6"). No ímã e na bolinha cada foto ocupa uma janela e o preço é por unidade; nas fotos 3x4 a mesma foto preenche a folha inteira e o preço é por folha.'),
       el(
         'table',
         { class: 'formatos', id: 'tabela-modelos' },
-        el('thead', {}, el('tr', {}, ...['Ativo', 'Nome', 'Janela', 'Preço por unidade (R$)'].map((t) => el('th', {}, t)))),
+        el('thead', {}, el('tr', {}, ...['Ativo', 'Nome', 'Folha 10x15', 'Preço (R$)'].map((t) => el('th', {}, t)))),
         el(
           'tbody',
           {},
@@ -275,13 +275,16 @@ function montarForm() {
             const j = m.janelas[0];
             const cm = (v) => ((v * mm) / 10).toFixed(1).replace('.', ',');
             const medida = `${cm(j.l)} × ${cm(j.a)} cm${j.forma === 'elipse' ? ' (redonda)' : ''}`;
+            const iguais = m.janelas.filter((x) => x.l === j.l && x.a === j.a).length;
+            const maior = m.janelas.find((x) => x.l !== j.l);
+            const descricao = `${iguais} de ${medida}${maior ? ` + 1 de ${cm(maior.l)} × ${cm(maior.a)} cm` : ''} · ${m.repetir ? 'mesma foto, preço por folha' : 'uma foto por janela, preço por unidade'}`;
             const tr = el(
               'tr',
               {},
               el('td', {}, el('input', { type: 'checkbox', 'data-m': 'ativo', checked: m.ativo, 'aria-label': 'Ativo' })),
               el('td', {}, el('input', { type: 'text', 'data-m': 'nome', value: m.nome, maxlength: '30', 'aria-label': 'Nome' })),
-              el('td', {}, `${m.janelas.length} de ${medida}`),
-              el('td', {}, el('input', { type: 'number', 'data-m': 'preco', value: String(m.preco), min: '0', step: '0.01', 'aria-label': 'Preço por unidade' })),
+              el('td', {}, descricao),
+              el('td', {}, el('input', { type: 'number', 'data-m': 'preco', value: String(m.preco), min: '0', step: '0.01', 'aria-label': 'Preço' })),
             );
             tr.dataset.id = m.id;
             return tr;

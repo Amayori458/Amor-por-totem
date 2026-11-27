@@ -180,7 +180,8 @@ export function dpiEfetivo(foto, formato, bordaMm = 0) {
   const [ew, eh] = dimsGiradas(foto.w, foto.h, foto.giro);
   const [uw, uh] = m.util;
   const base = foto.modo === 'inteira' ? Math.min(uw / ew, uh / eh) : Math.max(uw / ew, uh / eh);
-  return 25.4 / (base * (foto.modo === 'inteira' ? 1 : foto.zoom));
+  // numa folha com janelas de tamanhos diferentes, vale a maior (é onde falta resolução primeiro)
+  return 25.4 / (base * (foto.modo === 'inteira' ? 1 : foto.zoom) * (formato.ampliacao || 1));
 }
 
 /**
@@ -279,8 +280,43 @@ export function formatoDoModelo(modelo) {
     altura: Math.max(l, a),
     deitadaFixa: l > a,
     forma: j.forma,
+    // quantas vezes a maior janela é maior que a do ajuste (3x4 + 5x7: a foto grande)
+    ampliacao: Math.max(...modelo.janelas.map((x) => x.l / j.l)),
     modelo,
   };
+}
+
+/**
+ * Desenha a folha de um modelo com o canto em (ox, oy), a `px` pixels por px da máscara:
+ * cada foto na posição e no tamanho da sua janela e a máscara do gabarito por cima.
+ * `unidades[i]` = { img, foto } da janela i (janela sem foto fica branca).
+ */
+export function desenharFolha(ctx, modelo, mascara, unidades, px, ox = 0, oy = 0) {
+  modelo.janelas.forEach((j, i) => {
+    const u = unidades[i];
+    if (!u) return;
+    // 1 px de sobra de cada lado para a máscara cobrir a emenda; quem dá a forma é a máscara
+    const W = (j.l + 2) * px;
+    const H = (j.a + 2) * px;
+    // o mesmo enquadramento vale para janelas de proporções diferentes: cada uma confere os
+    // próprios limites, para a foto nunca deixar buraco
+    const ajuste = limitarAjuste({ ...u.foto }, W, H);
+    desenharFoto(ctx, u.img, ajuste, ox + (j.x - 1) * px, oy + (j.y - 1) * px, W, H);
+  });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  if (mascara) ctx.drawImage(mascara, ox, oy, modelo.mascara.largura * px, modelo.mascara.altura * px);
+}
+
+/** Prévia da folha inteira (deitada, como no gabarito) num canvas de `larguraPx`. */
+export function pintarFolha(canvas, modelo, mascara, unidades, larguraPx) {
+  const px = larguraPx / modelo.mascara.largura;
+  canvas.width = Math.round(larguraPx);
+  canvas.height = Math.round(modelo.mascara.altura * px);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  desenharFolha(ctx, modelo, mascara, unidades, px);
 }
 
 /** Distribui as unidades (uma foto por janela) em folhas: [[u1,u2],[u3,…]]. */
@@ -314,19 +350,9 @@ export async function renderizarFolha(modelo, mascara, unidades, dpi) {
     H = P.w;
   }
   const px = (modelo.folha.largura * mm) / modelo.mascara.largura; // px do papel por px da máscara
-  const fw = modelo.mascara.largura * px;
-  const fh = modelo.mascara.altura * px;
-  const ox = (W - fw) / 2;
-  const oy = (H - fh) / 2;
-  modelo.janelas.forEach((j, i) => {
-    const u = unidades[i];
-    if (!u) return;
-    // 1 px de sobra de cada lado para a máscara cobrir a emenda; quem dá a forma é a máscara
-    desenharFoto(ctx, u.img, u.foto, ox + (j.x - 1) * px, oy + (j.y - 1) * px, (j.l + 2) * px, (j.a + 2) * px);
-  });
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(mascara, ox, oy, fw, fh);
+  const ox = (W - modelo.mascara.largura * px) / 2;
+  const oy = (H - modelo.mascara.altura * px) / 2;
+  desenharFolha(ctx, modelo, mascara, unidades, px, ox, oy);
   return paraBlob(c, 'image/jpeg', 0.95);
 }
 

@@ -223,7 +223,27 @@ test('impressão direta: papel pela medida e leitura da resposta do Windows', as
 
 test('produtos com gabarito: ímã e bolinha entram no pedido como folhas, com preço por unidade', async () => {
   const cfg0 = (await req('/api/config')).dados;
-  assert.deepEqual(cfg0.modelos.map((m) => [m.id, m.janelas.length, m.janelas[0].forma]), [['ima', 2, 'retangulo'], ['bolinha', 2, 'elipse']]);
+  assert.deepEqual(cfg0.modelos.map((m) => [m.id, m.janelas.length, m.janelas[0].forma, !!m.repetir]), [
+    ['ima', 2, 'retangulo', false],
+    ['bolinha', 2, 'elipse', false],
+    ['3x4-8', 8, 'retangulo', true],
+    ['3x4-5x7', 5, 'retangulo', true],
+  ]);
+  // fotos 3x4: janelas de 35 x 45 mm que não se sobrepõem; no "3x4 + 5x7" a grande é a metade direita
+  for (const m of cfg0.modelos.filter((x) => x.repetir)) {
+    const mmPx = m.folha.largura / m.mascara.largura;
+    assert.equal(Math.round(m.janelas[0].l * mmPx), 35, m.id);
+    assert.equal(Math.round(m.janelas[0].a * mmPx), 45, m.id);
+    for (const a of m.janelas) {
+      for (const b of m.janelas) {
+        if (a === b) continue;
+        const separadas = a.x + a.l <= b.x || b.x + b.l <= a.x || a.y + a.a <= b.y || b.y + b.a <= a.y;
+        assert.ok(separadas, m.id);
+      }
+    }
+  }
+  const grande = cfg0.modelos[3].janelas[4];
+  assert.deepEqual([grande.x, grande.y, grande.l, grande.a], [886, 0, 886, 1181]);
   // as janelas cabem dentro da máscara e o arquivo da máscara existe
   for (const m of cfg0.modelos) {
     for (const j of m.janelas) {
@@ -244,7 +264,12 @@ test('produtos com gabarito: ímã e bolinha entram no pedido como folhas, com p
   const cfg = (await req('/api/admin/config', { admin: token })).dados.config;
   cfg.modelos = [{ id: 'ima', nome: 'Ímã de geladeira', preco: 4, ativo: true, janelas: [] }, { id: 'bolinha', ativo: false }, { id: 'intruso', nome: 'x' }];
   const salvo = (await req('/api/admin/config', { metodo: 'PUT', admin: token, corpo: cfg })).dados.config;
-  assert.deepEqual(salvo.modelos.map((m) => [m.id, m.nome, m.preco, m.ativo, m.janelas.length]), [['ima', 'Ímã de geladeira', 4, true, 2], ['bolinha', 'Bolinha de Natal', 0, false, 2]]);
+  assert.deepEqual(salvo.modelos.map((m) => [m.id, m.nome, m.preco, m.ativo, m.janelas.length]), [
+    ['ima', 'Ímã de geladeira', 4, true, 2],
+    ['bolinha', 'Bolinha de Natal', 0, false, 2],
+    ['3x4-8', '3x4 com 8 fotos', 0, true, 8],
+    ['3x4-5x7', '3x4 + 5x7', 0, true, 5],
+  ]);
 
   // 3 ímãs = 1 folha cheia + 1 folha com uma janela; mais 2 fotos 10x15 a 2,50
   const p = (await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ formato: '10x15', copias: 2 }, { modelo: 'ima', unidades: 2 }, { modelo: 'ima', unidades: 1 }] } })).dados;
@@ -261,4 +286,13 @@ test('produtos com gabarito: ímã e bolinha entram no pedido como folhas, com p
   assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: 'bolinha', unidades: 2 }] } })).status, 400);
   assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: 'intruso', unidades: 1 }] } })).status, 400);
   assert.equal((await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: 'ima', unidades: 99 }] } })).dados.total, 8);
+
+  // foto 3x4: a mesma foto na folha toda; cópias = folhas e o preço é por folha
+  salvo.modelos.find((m) => m.id === '3x4-8').preco = 15;
+  await req('/api/admin/config', { metodo: 'PUT', admin: token, corpo: salvo });
+  const p3 = (await req('/api/pedidos', { metodo: 'POST', corpo: { itens: [{ modelo: '3x4-8', copias: 2, nome: 'rosto.jpg', unidades: 8 }] } })).dados;
+  assert.equal(p3.total, 30);
+  const g3 = (await req('/api/admin/pedidos', { admin: token })).dados.pedidos.find((x) => x.id === p3.id);
+  assert.deepEqual(g3.itens.map((i) => [i.arquivo, i.formatoNome, i.copias, i.preco, i.unidades]), [['001_3x4-8_2x.jpg', '3x4 com 8 fotos', 2, 15, undefined]]);
+  assert.equal(g3.totalCopias, 2);
 });
