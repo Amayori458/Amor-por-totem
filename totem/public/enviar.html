@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#43bbb9">
+<title>Enviar fotos — Amor por Fotos</title>
+<link rel="icon" href="/img/logo.png">
+<link rel="stylesheet" href="/css/fontes.css">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/componentes.css">
+<link rel="stylesheet" href="/css/enviar.css">
+</head>
+<body>
+<header class="cabeca">
+  <img src="/img/logo.png" alt="Amor por Fotos" id="logo">
+</header>
+<main>
+  <section id="tela-envio">
+    <h1 class="title">Escolha as fotos para revelar</h1>
+    <p class="body apoio">Elas aparecem na tela do totem assim que o envio terminar.</p>
+    <label class="af-btn af-btn-primary af-btn-block escolher">
+      <span id="rotulo-escolher">Escolher fotos</span>
+      <input type="file" id="arquivo" accept="image/*" multiple hidden>
+    </label>
+    <p class="resumo" id="resumo" role="status" aria-live="polite"></p>
+    <ul class="lista" id="lista"></ul>
+    <p class="small rodape">Suas fotos ficam só no totem e são apagadas ao final do pedido.</p>
+  </section>
+  <section id="tela-erro" hidden>
+    <h1 class="title">Este código já foi usado</h1>
+    <p class="body apoio" id="erro-texto">Toque em “Começar” no totem e leia o novo QR Code.</p>
+  </section>
+</main>
+<script type="module" src="/js/enviar.js"></script>
+</body>
+</html>

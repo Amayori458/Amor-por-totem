@@ -1,0 +1,126 @@
+/* Amor por Fotos — generated from tokens.json */
+:root, [data-theme="light"] {
+  --surface: #ffffff; /* Fundo da página. Branco é a base da marca: muito respiro. */
+  --surface-soft: #f3faf9; /* Faixas de seção alternadas e fundo da vitrine. */
+  --surface-raised: #ffffff; /* Cards de produto, carrinho, menus. */
+  --line: #dcebea; /* Divisórias e contorno decorativo de cards. Não usar como borda de campo (baixo contraste). */
+  --line-strong: #6b8f8d; /* Borda de campos e botão secundário — 3:1 sobre surface e surface-soft/raised nos dois temas. */
+  --ink: #1d2b2a; /* Texto principal, sobre surface, surface-soft e surface-raised. */
+  --ink-muted: #5a6b6a; /* Texto secundário: variação, medidas, legenda. Sobre qualquer surface. */
+  --turquesa: #43bbb9; /* Cor dominante da marca (#43BBB9). Só como preenchimento: faixas, blocos, ilustração, fundo do header. Nunca como cor de texto sobre branco (2,3:1); texto sobre ela usa on-turquesa. */
+  --on-turquesa: #10302f; /* Texto e ícones sobre preenchimento turquesa (6:1). */
+  --turquesa-soft: #e3f5f4; /* Fundo de chip ativo, selo 'Novo', área de imagem vazia. */
+  --turquesa-deep: #16706e; /* Ação principal (botão Adicionar), links, preço. Como texto: sobre surfaces e turquesa-soft. */
+  --on-turquesa-deep: #ffffff; /* Rótulo sobre preenchimento turquesa-deep (botão primário). */
+  --coracao: #be202f; /* Vermelho do coração (#BE202F). Só detalhes: coração, selo Promoção, preço 'de/por', contador do carrinho. Como texto: sobre surfaces e coracao-soft. */
+  --coracao-soft: #fbe7e9; /* Fundo do selo Promoção. */
+  --on-coracao: #ffffff; /* Texto sobre preenchimento coracao (contador do carrinho). */
+  --whatsapp: #0f7a43; /* Somente o botão 'Enviar pedido pelo WhatsApp'. Texto sobre ela: on-whatsapp. */
+  --on-whatsapp: #ffffff; /* Rótulo sobre o botão WhatsApp. */
+  --link: var(--turquesa-deep); /* Links de texto — alias de turquesa-deep. */
+  --shadow-sm: 0 1px 2px #1d2b2a0d, 0 2px 8px #16706e14; /* Card de produto em repouso. */
+  --shadow-lg: 0 6px 12px #1d2b2a12, 0 16px 32px -4px #16706e29; /* Card em hover, barra do carrinho, menus. */
+  --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #16706e; /* Foco do teclado: 2px da cor da página e 2px sólidos de turquesa-deep (≥3:1 em todas as surfaces). */
+}
+[data-theme="dark"] {
+  --surface: #121a1a;
+  --surface-soft: #172120;
+  --surface-raised: #1f2b2a;
+  --line: #2f3f3e;
+  --line-strong: #6a8a88;
+  --ink: #eef6f5;
+  --ink-muted: #a9bcbb;
+  --turquesa: #43bbb9;
+  --on-turquesa: #10302f;
+  --turquesa-soft: #173a39;
+  --turquesa-deep: #6fd3d1;
+  --on-turquesa-deep: #0e1c1c;
+  --coracao: #ff7a84;
+  --coracao-soft: #3d1418;
+  --on-coracao: #1a0a0c;
+  --whatsapp: #3ddc84;
+  --on-whatsapp: #0b1f14;
+  --link: var(--turquesa-deep);
+  --shadow-sm: 0 1px 3px #000000b3;
+  --shadow-lg: 0 12px 28px -2px #000000cc;
+  --focus-ring: 0 0 0 2px #121a1a, 0 0 0 4px #6fd3d1;
+}
+:root {
+  --space-1: 4px; /* Ícone ↔ rótulo. */
+  --space-2: 8px; /* Dentro de chips e selos. */
+  --space-3: 12px; /* Entre nome, variação e preço no card. */
+  --space-4: 16px; /* Padding do card; margem lateral no celular. */
+  --space-6: 24px; /* Gap da grade de produtos. */
+  --space-8: 32px; /* Padding do banner. */
+  --space-12: 48px; /* Entre seções da página. */
+  --radius-sm: 6px; /* Selos, campos pequenos. */
+  --radius-md: 12px; /* Botões, imagem do produto, campo de busca. */
+  --radius-lg: 20px; /* Cards de produto, banner, carrinho. */
+  --radius-full: 9999px; /* Chips de categoria, contador do carrinho. */
+  --font-display: Fraunces, Georgia, serif;
+  --font-sans: Figtree, ui-sans-serif, system-ui, sans-serif;
+  --text-display: 600 44px/48px var(--font-display); /* Título do banner da home. Um por página. */
+  --text-title: 600 30px/36px var(--font-display); /* Título de página de categoria e de produto. */
+  --text-heading: 600 22px/28px var(--font-display); /* Títulos de seção da vitrine. */
+  --text-body: 400 16px/24px var(--font-sans); /* Descrições e textos corridos. */
+  --text-product-name: 600 15px/20px var(--font-sans); /* Nome do produto no card. */
+  --text-price: 700 20px/24px var(--font-sans); /* Preço no card e na página do produto, em turquesa-deep. */
+  --text-small: 400 14px/20px var(--font-sans); /* Variação, parcelamento, rodapé. */
+  --text-caption: 600 12px/16px var(--font-sans); /* Selos e rótulos em maiúsculas. */
+}
+.display {
+  font-family: var(--font-display);
+  font-size: 44px;
+  line-height: 48px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.title {
+  font-family: var(--font-display);
+  font-size: 30px;
+  line-height: 36px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.heading {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.product-name {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.price {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.small {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.caption {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}

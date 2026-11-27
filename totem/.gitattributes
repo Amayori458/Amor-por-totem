@@ -1,0 +1,3 @@
+# Guardados com fim de linha do Windows (CRLF) tal como estao, inclusive no "Download ZIP" do GitHub.
+*.bat -text
+*.ps1 -text

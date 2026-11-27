@@ -1,0 +1,1498 @@
+'use strict';
+/*
+ * Totem de revelação de fotos — Amor por Fotos
+ * Servidor local sem dependências (Node 18+).
+ *
+ *   node server.js            só o servidor
+ *   node server.js --totem    servidor + navegador em tela cheia, imprimindo sem diálogo
+ *   node server.js --teste    servidor + navegador em janela normal (mostra o diálogo de impressão)
+ */
+if (Number(process.versions.node.split('.')[0]) < 18) {
+  console.error(`Este totem precisa do Node.js 18 ou mais novo (encontrado: ${process.versions.node}). Baixe em https://nodejs.org`);
+  process.exit(1);
+}
+
+const http = require('http');
+const fs = require('fs');
+const fsp = fs.promises;
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+const RAIZ = __dirname;
+const PUBLICO = path.join(RAIZ, 'public');
+const DADOS = path.resolve(process.env.TOTEM_DADOS || path.join(RAIZ, 'dados'));
+const PORTA = Number(process.env.TOTEM_PORTA || process.env.PORT || 3000);
+// Porta que só o túnel da internet usa. Tudo que chega por ela é tratado como "de fora",
+// mesmo vindo de 127.0.0.1 (o cloudflared roda no próprio totem).
+const PORTA_INTERNET = Number(process.env.TOTEM_PORTA_INTERNET || PORTA + 1);
+const ADMIN_REMOTO = process.env.TOTEM_ADMIN_REMOTO === '1';
+const ARGS = new Set(process.argv.slice(2));
+
+const DIR_SESSOES = path.join(DADOS, 'sessoes');
+const DIR_PEDIDOS = path.join(DADOS, 'pedidos');
+const ARQ_CONFIG = path.join(DADOS, 'config.json');
+const ARQ_ESTADO = path.join(DADOS, 'estado.json');
+
+const MAX_FOTO = 40 * 1024 * 1024; // por arquivo
+const MAX_MINI = 2 * 1024 * 1024;
+const MAX_JSON = 256 * 1024;
+const SESSAO_OCIOSA_MS = 60 * 60 * 1000;
+
+/* ───────────── Configuração ───────────── */
+
+const PADRAO = {
+  loja: 'Amor por Fotos',
+  chamada: 'Revele suas fotos na hora',
+  mensagemFinal: 'Retire suas fotos na impressora. Obrigado pelo carinho!',
+  // Todos os tamanhos da Fujifilm ASK-400 (300 dpi) já vêm ativos; o primeiro é o tamanho inicial das fotos.
+  // Rolo de 6": 10x15, 15x20, 15x15. Rolo de 5": 13x18, 13x13, 9x13.
+  // Desative no painel os que o papel carregado na impressora não consegue fazer.
+  formatos: [
+    { id: '10x15', nome: '10x15', largura: 102, altura: 152, preco: 0, ativo: true },
+    { id: '13x18', nome: '13x18', largura: 127, altura: 178, preco: 0, ativo: true },
+    { id: '15x20', nome: '15x20', largura: 152, altura: 203, preco: 0, ativo: true },
+    { id: '15x15', nome: '15x15', largura: 152, altura: 152, preco: 0, ativo: true },
+    { id: '13x13', nome: '13x13', largura: 127, altura: 127, preco: 0, ativo: true },
+    { id: '9x13', nome: '9x13', largura: 89, altura: 127, preco: 0, ativo: true },
+  ],
+  // Produtos com gabarito: uma folha (papel 10x15) com janelas onde entram as fotos, e a máscara
+  // do arquivo do Photoshop por cima (public/modelos/*.png). Medidas das janelas em px da máscara.
+  // No painel só mudam nome, preço e ativo; a geometria vem sempre daqui.
+  // repetir: true = a mesma foto preenche todas as janelas da folha (foto de documento) e o
+  // preço é por folha. Sem repetir, cada foto ocupa uma janela e o preço é por unidade.
+  modelos: [
+    {
+      id: 'ima',
+      nome: 'Ímã 6,5x9',
+      arquivo: 'ima.png',
+      mascara: { largura: 1772, altura: 1181 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      janelas: [
+        { x: 59, y: 59, l: 768, a: 1063, forma: 'retangulo' },
+        { x: 945, y: 59, l: 768, a: 1063, forma: 'retangulo' },
+      ],
+      preco: 0,
+      ativo: true,
+    },
+    {
+      id: 'bolinha',
+      nome: 'Bolinha de Natal',
+      arquivo: 'bolinhas-de-natal.png',
+      mascara: { largura: 1770, altura: 1180 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      janelas: [
+        { x: 47, y: 167, l: 798, a: 806, forma: 'elipse' },
+        { x: 873, y: 167, l: 798, a: 806, forma: 'elipse' },
+      ],
+      preco: 0,
+      ativo: true,
+    },
+    {
+      id: '3x4-8',
+      nome: '3x4 com 8 fotos',
+      arquivo: '3x4-com-8.png',
+      repetir: true,
+      mascara: { largura: 1772, altura: 1181 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      janelas: [14, 447, 900, 1333].flatMap((x) => [36, 607].map((y) => ({ x, y, l: 413, a: 531, forma: 'retangulo' }))),
+      preco: 0,
+      ativo: true,
+    },
+    {
+      id: '3x4-5x7',
+      nome: '3x4 + 5x7',
+      arquivo: '3x4-5x7.png',
+      repetir: true,
+      mascara: { largura: 1772, altura: 1181 },
+      folha: { largura: 150, altura: 100 },
+      papel: { largura: 102, altura: 152 },
+      // a primeira janela é a que o cliente vê ao ajustar (3x4); a grande ocupa a metade direita
+      janelas: [
+        ...[14, 447].flatMap((x) => [36, 607].map((y) => ({ x, y, l: 413, a: 531, forma: 'retangulo' }))),
+        { x: 886, y: 0, l: 886, a: 1181, forma: 'retangulo' },
+      ],
+      preco: 0,
+      ativo: true,
+    },
+  ],
+  mostrarPrecos: false,
+  maxFotos: 100,
+  maxCopias: 20,
+  ociosoSeg: 120,
+  pendrive: true,
+  imprimir: true,
+  // 'auto': direto pelo Windows e, se não der, pelo navegador · 'windows' · 'navegador'
+  modoImpressao: 'auto',
+  permitirBorda: true,
+  bordaMm: 4,
+  dpi: 300,
+  diasGuardar: 7,
+  impressora: '', // nome da impressora no Windows; vazio = o totem procura a ASK-400 sozinho
+  internet: true, // receber fotos pelo 4G/5G do cliente, por um túnel Cloudflare
+  enderecoPublico: '',
+  wifi: { ssid: '', senha: '', tipo: 'WPA' },
+  pin: null, // { sal, hash } — enquanto for null, o PIN é 1234
+};
+const PIN_PADRAO = '1234';
+
+let config = structuredClone(PADRAO);
+let estado = { proximoNumero: 1 };
+
+function erro(status, mensagem) {
+  const e = new Error(mensagem);
+  e.status = status;
+  return e;
+}
+
+async function gravarJson(arquivo, dados) {
+  const tmp = `${arquivo}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  await fsp.writeFile(tmp, JSON.stringify(dados, null, 2));
+  await fsp.rename(tmp, arquivo);
+}
+
+async function lerJson(arquivo, reserva) {
+  try {
+    return JSON.parse(await fsp.readFile(arquivo, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.warn(`[aviso] não consegui ler ${path.basename(arquivo)}: ${e.message}`);
+    return reserva;
+  }
+}
+
+const texto = (v, max, reserva = '') => (typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max) : reserva);
+const numero = (v, min, max, reserva) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : reserva;
+};
+const inteiro = (v, min, max, reserva) => Math.round(numero(v, min, max, reserva));
+const logico = (v, reserva) => (typeof v === 'boolean' ? v : reserva);
+
+function limparFormatos(lista, reserva) {
+  if (!Array.isArray(lista)) return reserva;
+  const usados = new Set();
+  const saida = [];
+  for (const f of lista.slice(0, 12)) {
+    if (!f || typeof f !== 'object') continue;
+    const nome = texto(f.nome, 20);
+    if (!nome) continue;
+    let a = numero(f.largura, 20, 620, NaN);
+    let b = numero(f.altura, 20, 620, NaN);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (a > b) [a, b] = [b, a];
+    const base = (texto(f.id, 24) || nome).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'formato';
+    let id = base;
+    for (let i = 2; usados.has(id); i++) id = `${base}-${i}`;
+    usados.add(id);
+    saida.push({ id, nome, largura: a, altura: b, preco: Math.round(numero(f.preco, 0, 9999, 0) * 100) / 100, ativo: logico(f.ativo, true) });
+  }
+  if (!saida.length) return reserva;
+  if (!saida.some((f) => f.ativo)) saida[0].ativo = true;
+  return saida;
+}
+
+/** Modelos: a lista e a geometria são as do programa; do painel só vêm nome, preço e ativo. */
+function limparModelos(lista, atual) {
+  const veio = Array.isArray(lista) ? lista : [];
+  return PADRAO.modelos.map((base) => {
+    const antes = (atual || []).find((m) => m && m.id === base.id) || base;
+    const novo = veio.find((m) => m && m.id === base.id) || antes;
+    return {
+      ...structuredClone(base),
+      nome: texto(novo.nome, 30) || antes.nome || base.nome,
+      preco: Math.round(numero(novo.preco, 0, 9999, antes.preco || 0) * 100) / 100,
+      ativo: logico(novo.ativo, antes.ativo !== false),
+    };
+  });
+}
+
+function limparEndereco(v) {
+  const s = texto(v, 200).replace(/\/+$/, '');
+  if (!s) return '';
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return u.origin + u.pathname.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+/** Mescla o que veio (do disco ou do painel) sobre a configuração atual, validando tudo. */
+function limparConfig(entrada, atual) {
+  const e = entrada && typeof entrada === 'object' ? entrada : {};
+  const w = e.wifi && typeof e.wifi === 'object' ? e.wifi : {};
+  return {
+    loja: texto(e.loja, 60) || atual.loja,
+    chamada: texto(e.chamada, 80) || atual.chamada,
+    mensagemFinal: texto(e.mensagemFinal, 160, atual.mensagemFinal),
+    formatos: limparFormatos(e.formatos, atual.formatos),
+    modelos: limparModelos(e.modelos, atual.modelos),
+    mostrarPrecos: logico(e.mostrarPrecos, atual.mostrarPrecos),
+    maxFotos: inteiro(e.maxFotos, 1, 500, atual.maxFotos),
+    maxCopias: inteiro(e.maxCopias, 1, 99, atual.maxCopias),
+    ociosoSeg: inteiro(e.ociosoSeg, 30, 900, atual.ociosoSeg),
+    pendrive: logico(e.pendrive, atual.pendrive),
+    imprimir: logico(e.imprimir, atual.imprimir),
+    modoImpressao: ['auto', 'windows', 'navegador'].includes(e.modoImpressao) ? e.modoImpressao : atual.modoImpressao,
+    permitirBorda: logico(e.permitirBorda, atual.permitirBorda),
+    bordaMm: numero(e.bordaMm, 0, 20, atual.bordaMm),
+    dpi: inteiro(e.dpi, 150, 600, atual.dpi),
+    diasGuardar: inteiro(e.diasGuardar, 0, 365, atual.diasGuardar),
+    impressora: texto(e.impressora, 200, atual.impressora),
+    internet: logico(e.internet, atual.internet),
+    enderecoPublico: e.enderecoPublico === undefined ? atual.enderecoPublico : limparEndereco(e.enderecoPublico),
+    wifi: {
+      ssid: texto(w.ssid, 32, atual.wifi.ssid),
+      senha: texto(w.senha, 63, atual.wifi.senha),
+      tipo: ['WPA', 'WEP', 'nopass'].includes(w.tipo) ? w.tipo : atual.wifi.tipo,
+    },
+    pin: atual.pin,
+  };
+}
+
+function hashPin(pin, sal) {
+  return crypto.scryptSync(String(pin), sal, 32).toString('hex');
+}
+
+function pinConfere(pin) {
+  if (typeof pin !== 'string' || !pin) return false;
+  if (!config.pin) return pin === PIN_PADRAO;
+  const a = Buffer.from(hashPin(pin, config.pin.sal), 'hex');
+  const b = Buffer.from(config.pin.hash, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/* ───────────── Rede ───────────── */
+
+function enderecos() {
+  const lista = [];
+  for (const [nome, ifaces] of Object.entries(os.networkInterfaces())) {
+    for (const i of ifaces || []) {
+      if (i.internal || i.family !== 'IPv4' || i.address.startsWith('169.254.')) continue;
+      const privado = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address);
+      const virtual = /virtual|vethernet|vmware|vbox|docker|wsl|hyper-v|loopback|bluetooth/i.test(nome);
+      lista.push({ nome, ip: i.address, peso: (privado ? 0 : 2) + (virtual ? 1 : 0) });
+    }
+  }
+  return lista.sort((a, b) => a.peso - b.peso).map(({ nome, ip }) => ({ nome, ip, url: `http://${ip}:${PORTA}` }));
+}
+
+/** Endereço que vai no QR Code: fixo (se configurado), túnel da internet ou rede local. */
+function urlBase() {
+  if (config.enderecoPublico) return config.enderecoPublico;
+  if (config.internet && tunel.estado === 'ativo') return tunel.url;
+  const e = enderecos();
+  return e.length ? e[0].url : '';
+}
+
+/** O celular precisa estar no Wi-Fi da loja? Só quando o QR aponta para a rede local. */
+function viaInternet() {
+  return !!config.enderecoPublico || (config.internet && tunel.estado === 'ativo');
+}
+
+function urlEnvio(id) {
+  const base = urlBase();
+  return base ? `${base}/enviar?s=${id}` : '';
+}
+
+/** A requisição chegou pela porta do túnel (internet)? */
+const ehExterno = (req) => req.socket.server === servidorInternet;
+
+/** Só a tela do próprio totem é "local": mesma máquina e fora da porta do túnel. */
+function ehLocal(req) {
+  if (ehExterno(req)) return false;
+  const a = req.socket.remoteAddress || '';
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+
+/* ───────────── Sessões (fotos recebidas, apagadas ao final) ───────────── */
+
+/** @type {Map<string, {id:string, criada:number, vista:number, conectado:boolean, enviando:number, fotos:Array}>} */
+const sessoes = new Map();
+
+const novoId = (bytes = 12) => crypto.randomBytes(bytes).toString('hex');
+const dirSessao = (id) => path.join(DIR_SESSOES, id);
+
+function pegarSessao(id) {
+  const s = sessoes.get(id);
+  if (!s) throw erro(404, 'Esta sessão terminou. Leia o QR Code do totem de novo.');
+  s.vista = Date.now();
+  return s;
+}
+
+async function apagarSessao(id) {
+  sessoes.delete(id);
+  await fsp.rm(dirSessao(id), { recursive: true, force: true });
+}
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+function tipoImagem(b) {
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  if (b.length >= 8 && b.subarray(0, 8).equals(PNG)) return 'png';
+  if (b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+const MIME = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+
+/** Grava o corpo da requisição em disco, com limite de tamanho, e confere se é mesmo uma imagem. */
+function receberImagem(req, destinoSemExt, limite, tipos = ['jpg', 'png', 'webp']) {
+  return new Promise((resolve, reject) => {
+    if (Number(req.headers['content-length'] || 0) > limite) {
+      req.resume();
+      return reject(erro(413, 'Foto grande demais.'));
+    }
+    const tmp = `${destinoSemExt}.parte`;
+    const saida = fs.createWriteStream(tmp);
+    let total = 0;
+    let cabeca = Buffer.alloc(0);
+    let falha = null;
+    let fim = false;
+    const terminar = (e) => {
+      if (fim) return;
+      fim = true;
+      saida.destroy();
+      fs.rm(tmp, { force: true }, () => reject(e));
+    };
+    req.on('data', (parte) => {
+      total += parte.length;
+      if (cabeca.length < 16) cabeca = Buffer.concat([cabeca, parte]).subarray(0, 16);
+      if (total > limite) {
+        falha = falha || erro(413, 'Foto grande demais.');
+        if (total > limite * 2) req.destroy();
+        return;
+      }
+      if (!saida.write(parte)) {
+        req.pause();
+        saida.once('drain', () => req.resume());
+      }
+    });
+    req.on('error', () => terminar(erro(400, 'O envio foi interrompido.')));
+    req.on('close', () => {
+      if (!req.complete) terminar(erro(400, 'O envio foi interrompido.'));
+    });
+    saida.on('error', (e) => terminar(erro(500, `Não consegui gravar a foto: ${e.message}`)));
+    req.on('end', () => {
+      if (falha) return terminar(falha);
+      saida.end(async () => {
+        if (fim) return;
+        const ext = tipoImagem(cabeca);
+        if (!ext || !tipos.includes(ext)) return terminar(erro(415, 'Este arquivo não é uma foto JPG, PNG ou WebP.'));
+        fim = true;
+        try {
+          await fsp.rename(tmp, `${destinoSemExt}.${ext}`);
+          resolve({ ext, tamanho: total });
+        } catch (e) {
+          fs.rm(tmp, { force: true }, () => reject(e));
+        }
+      });
+    });
+  });
+}
+
+function lerCorpo(req, limite = MAX_JSON) {
+  return new Promise((resolve, reject) => {
+    const partes = [];
+    let total = 0;
+    req.on('data', (p) => {
+      total += p.length;
+      if (total > limite) {
+        reject(erro(413, 'Dados grandes demais.'));
+        req.destroy();
+      } else partes.push(p);
+    });
+    req.on('end', () => resolve(Buffer.concat(partes)));
+    req.on('error', reject);
+  });
+}
+
+async function lerJsonCorpo(req) {
+  const corpo = await lerCorpo(req);
+  if (!corpo.length) return {};
+  try {
+    const v = JSON.parse(corpo.toString('utf8'));
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    throw erro(400, 'JSON inválido.');
+  }
+}
+
+/* ───────────── Pedidos ───────────── */
+
+const ID_PEDIDO = /^\d{4}-\d{2}-\d{2}_\d{4,}$/;
+const dirPedido = (id) => {
+  if (!ID_PEDIDO.test(id)) throw erro(404, 'Pedido não encontrado.');
+  return path.join(DIR_PEDIDOS, id);
+};
+
+function hojeLocal(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+async function lerPedido(id) {
+  const p = await lerJson(path.join(dirPedido(id), 'pedido.json'), null);
+  if (!p) throw erro(404, 'Pedido não encontrado.');
+  return p;
+}
+
+const gravarPedido = (p) => gravarJson(path.join(dirPedido(p.id), 'pedido.json'), p);
+
+let filaNumero = Promise.resolve();
+/** Reserva o próximo número de pedido (serializado para nunca repetir). */
+function proximoNumero() {
+  const r = filaNumero.then(async () => {
+    const n = estado.proximoNumero;
+    estado.proximoNumero = n + 1;
+    await gravarJson(ARQ_ESTADO, estado);
+    return n;
+  });
+  filaNumero = r.catch(() => {});
+  return r;
+}
+
+async function criarPedido(dados) {
+  const itensIn = Array.isArray(dados.itens) ? dados.itens : [];
+  if (!itensIn.length) throw erro(400, 'O pedido está vazio.');
+  if (itensIn.length > 999) throw erro(400, 'Pedido grande demais.');
+  const borda = config.permitirBorda && dados.borda === true;
+  const itens = itensIn.map((it, i) => {
+    const n = i + 1;
+    if (it && it.modelo !== undefined) {
+      const m = config.modelos.find((x) => x.ativo && x.id === it.modelo);
+      if (!m) throw erro(400, 'Produto indisponível.');
+      if (m.repetir) {
+        // foto de documento: a mesma foto em todas as janelas; cópias = folhas, preço por folha
+        const folhas = inteiro(it.copias, 1, config.maxCopias, 1);
+        return {
+          n,
+          arquivo: `${String(n).padStart(3, '0')}_${m.id}_${folhas}x.jpg`,
+          nome: texto(it.nome, 120),
+          formato: m.id,
+          formatoNome: m.nome,
+          largura: m.papel.largura,
+          altura: m.papel.altura,
+          copias: folhas,
+          preco: m.preco,
+          recebido: false,
+        };
+      }
+      // folha de ímã, bolinha…: o preço é por unidade, ou seja, por janela preenchida
+      const unidades = inteiro(it.unidades, 1, m.janelas.length, m.janelas.length);
+      return {
+        n,
+        arquivo: `${String(n).padStart(3, '0')}_${m.id}_${unidades}un.jpg`,
+        nome: '',
+        formato: m.id,
+        formatoNome: m.nome,
+        largura: m.papel.largura,
+        altura: m.papel.altura,
+        copias: 1,
+        unidades,
+        preco: Math.round(m.preco * unidades * 100) / 100,
+        recebido: false,
+      };
+    }
+    const f = config.formatos.find((x) => x.ativo && x.id === (it && it.formato));
+    if (!f) throw erro(400, 'Tamanho de foto indisponível.');
+    const copias = inteiro(it.copias, 1, config.maxCopias, 1);
+    return {
+      n,
+      arquivo: `${String(n).padStart(3, '0')}_${f.id}_${copias}x.jpg`,
+      nome: texto(it.nome, 120),
+      formato: f.id,
+      formatoNome: f.nome,
+      largura: f.largura,
+      altura: f.altura,
+      copias,
+      preco: f.preco,
+      recebido: false,
+    };
+  });
+  const numeroPedido = await proximoNumero();
+  const id = `${hojeLocal()}_${String(numeroPedido).padStart(4, '0')}`;
+  const pedido = {
+    id,
+    numero: numeroPedido,
+    criado: new Date().toISOString(),
+    status: 'recebendo',
+    borda,
+    itens,
+    totalFotos: itens.length,
+    totalCopias: itens.reduce((s, i) => s + (i.unidades || i.copias), 0),
+    total: Math.round(itens.reduce((s, i) => s + i.copias * i.preco, 0) * 100) / 100,
+  };
+  await fsp.mkdir(dirPedido(id), { recursive: true });
+  await gravarPedido(pedido);
+  return pedido;
+}
+
+async function listarPedidos(limite = 300) {
+  let nomes = [];
+  try {
+    nomes = (await fsp.readdir(DIR_PEDIDOS)).filter((n) => ID_PEDIDO.test(n));
+  } catch {
+    return [];
+  }
+  nomes.sort().reverse();
+  const saida = [];
+  for (const n of nomes.slice(0, limite)) {
+    const p = await lerJson(path.join(DIR_PEDIDOS, n, 'pedido.json'), null);
+    if (p) saida.push(p);
+  }
+  return saida;
+}
+
+/* ───────────── Limpeza automática ───────────── */
+
+async function limpar() {
+  const agora = Date.now();
+  for (const s of [...sessoes.values()]) {
+    if (agora - s.vista > SESSAO_OCIOSA_MS) await apagarSessao(s.id).catch(() => {});
+  }
+  if (config.diasGuardar > 0) {
+    const corte = hojeLocal(new Date(agora - config.diasGuardar * 86400000));
+    let nomes = [];
+    try {
+      nomes = await fsp.readdir(DIR_PEDIDOS);
+    } catch {}
+    for (const n of nomes) {
+      if (ID_PEDIDO.test(n) && n.slice(0, 10) < corte) await fsp.rm(path.join(DIR_PEDIDOS, n), { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+/* ───────────── Painel (PIN) ───────────── */
+
+const tokensAdmin = new Map(); // token -> validade
+let errosPin = 0;
+let bloqueadoAte = 0;
+
+function exigirAdmin(req) {
+  if (!ADMIN_REMOTO && !ehLocal(req)) throw erro(403, 'O painel só abre no próprio totem.');
+  const t = req.headers['x-admin'];
+  const validade = typeof t === 'string' ? tokensAdmin.get(t) : 0;
+  if (!validade || validade < Date.now()) {
+    if (t) tokensAdmin.delete(t);
+    throw erro(401, 'Digite o PIN do painel.');
+  }
+  tokensAdmin.set(t, Date.now() + 30 * 60 * 1000);
+}
+
+function exigirLocal(req) {
+  if (!ehLocal(req)) throw erro(403, 'Disponível apenas na tela do totem.');
+}
+
+function configPublica() {
+  const { pin, ...resto } = config;
+  return { ...resto, formatos: config.formatos.filter((f) => f.ativo), modelos: config.modelos.filter((m) => m.ativo), urlBase: urlBase(), viaInternet: viaInternet() };
+}
+
+/* ───────────── Navegador do totem ───────────── */
+
+let navegador = null;
+
+function acharNavegador() {
+  const existe = (p) => {
+    try {
+      return p && fs.statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (process.env.TOTEM_NAVEGADOR && existe(process.env.TOTEM_NAVEGADOR)) return process.env.TOTEM_NAVEGADOR;
+  let candidatos = [];
+  if (process.platform === 'win32') {
+    const bases = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean);
+    for (const rel of ['Google\\Chrome\\Application\\chrome.exe', 'Microsoft\\Edge\\Application\\msedge.exe']) {
+      for (const b of bases) candidatos.push(path.join(b, rel));
+    }
+  } else if (process.platform === 'darwin') {
+    candidatos = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'];
+  } else {
+    candidatos = ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge'];
+  }
+  return candidatos.find(existe) || null;
+}
+
+function argsNavegador(modo, url) {
+  const comuns = ['--no-first-run', '--no-default-browser-check', '--disable-features=Translate,TranslateUI', '--disable-session-crashed-bubble'];
+  if (modo === 'totem') {
+    return [
+      '--kiosk',
+      '--kiosk-printing', // imprime direto na impressora padrão, sem diálogo
+      `--user-data-dir=${path.join(DADOS, 'navegador')}`,
+      '--disable-pinch',
+      '--overscroll-history-navigation=0',
+      '--noerrdialogs',
+      '--disable-infobars',
+      ...comuns,
+      url,
+    ];
+  }
+  return [`--user-data-dir=${path.join(DADOS, 'navegador-teste')}`, '--new-window', ...comuns, url];
+}
+
+function abrirNavegador(modo) {
+  const exe = acharNavegador();
+  const url = `http://localhost:${PORTA}/`;
+  if (!exe) {
+    console.log(`\n[aviso] Não encontrei o Chrome nem o Edge. Abra manualmente: ${url}`);
+    return;
+  }
+  navegador = spawn(exe, argsNavegador(modo, url), { stdio: 'ignore', detached: false });
+  navegador.on('error', (e) => console.log(`[aviso] não consegui abrir o navegador: ${e.message}`));
+  navegador.on('exit', () => {
+    navegador = null;
+  });
+}
+
+function fecharNavegador() {
+  if (!navegador || !navegador.pid) return;
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/PID', String(navegador.pid), '/T', '/F'], { stdio: 'ignore' });
+    else navegador.kill();
+  } catch {}
+}
+
+function abrirNoSistema(alvo) {
+  const [cmd, args] =
+    process.platform === 'win32' ? ['explorer.exe', [alvo]] : process.platform === 'darwin' ? ['open', [alvo]] : ['xdg-open', [alvo]];
+  const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
+  p.on('error', () => {});
+  p.unref();
+}
+
+/* ───────────── Impressora (Windows) ─────────────
+ * O navegador do totem imprime na impressora padrão do Windows. Para o lojista não
+ * precisar mexer nas configurações do Windows, o totem:
+ *   - ao abrir, procura a impressora de fotos (Fujifilm ASK-400) e a define como padrão;
+ *   - mostra as impressoras instaladas no painel, para escolher com um toque;
+ *   - desliga o "Deixar o Windows gerenciar minha impressora padrão", que trocaria a
+ *     padrão sozinho.
+ */
+
+const NO_WINDOWS = process.platform === 'win32';
+const PS_UTF8 = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; ';
+const PS_LISTAR = `${PS_UTF8}Get-CimInstance Win32_Printer | Select-Object Name, DriverName, Default, WorkOffline | ConvertTo-Json -Compress`;
+// o nome da impressora vai por variável de ambiente: nunca é colado dentro do comando
+const PS_DEFINIR = `${PS_UTF8}$ErrorActionPreference = 'Stop'; ` +
+  `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows' -Name 'LegacyDefaultPrinterMode' -Value 1 -Type DWord; ` +
+  `$p = Get-CimInstance Win32_Printer | Where-Object { $_.Name -eq $env:TOTEM_IMPRESSORA } | Select-Object -First 1; ` +
+  `if (-not $p) { throw 'impressora nao encontrada' }; ` +
+  `Invoke-CimMethod -InputObject $p -MethodName SetDefaultPrinter | Out-Null`;
+
+function rodarPowerShell(comando, ambiente = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', comando], {
+      env: { ...process.env, ...ambiente },
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let saida = '';
+    const limite = setTimeout(() => p.kill(), 20000);
+    p.stdout.on('data', (d) => (saida += d));
+    p.on('error', (e) => {
+      clearTimeout(limite);
+      reject(e);
+    });
+    p.on('exit', (codigo) => {
+      clearTimeout(limite);
+      if (codigo === 0) resolve(saida);
+      else reject(new Error('o Windows não respondeu ao comando da impressora'));
+    });
+  });
+}
+
+const IMPRESSORA_VIRTUAL = /pdf|xps|onenote|fax|anydesk|send to|enviar para/i;
+const IMPRESSORA_FOTO = /ask[\s-]?400/i;
+
+/** Transforma a resposta do Windows (um objeto, uma lista ou nada) na lista do painel. */
+function interpretarImpressoras(textoJson) {
+  let bruto;
+  try {
+    bruto = JSON.parse(String(textoJson).trim() || '[]');
+  } catch {
+    return [];
+  }
+  return (Array.isArray(bruto) ? bruto : [bruto])
+    .filter((i) => i && typeof i.Name === 'string' && i.Name)
+    .map((i) => ({
+      nome: i.Name,
+      driver: typeof i.DriverName === 'string' ? i.DriverName : '',
+      padrao: i.Default === true,
+      desligada: i.WorkOffline === true,
+      virtual: IMPRESSORA_VIRTUAL.test(i.Name),
+    }));
+}
+
+/** Qual impressora o totem deve usar se o lojista ainda não escolheu: a ASK-400, se existir. */
+function impressoraAutomatica(lista) {
+  const foto = lista.find((i) => IMPRESSORA_FOTO.test(i.nome) || IMPRESSORA_FOTO.test(i.driver));
+  return foto ? foto.nome : '';
+}
+
+async function listarImpressoras() {
+  if (!NO_WINDOWS) return [];
+  return interpretarImpressoras(await rodarPowerShell(PS_LISTAR));
+}
+
+async function definirImpressora(nome) {
+  await rodarPowerShell(PS_DEFINIR, { TOTEM_IMPRESSORA: nome });
+}
+
+/** Ao abrir o totem: garante que a impressora escolhida (ou a ASK-400) é a padrão do Windows. */
+async function prepararImpressora() {
+  if (!NO_WINDOWS) return;
+  try {
+    const lista = await listarImpressoras();
+    const escolhida = lista.find((i) => i.nome === config.impressora);
+    const nome = escolhida ? escolhida.nome : impressoraAutomatica(lista);
+    if (!nome) {
+      const padrao = lista.find((i) => i.padrao);
+      console.log(`  [impressora] não encontrei a ASK-400 instalada. ${padrao ? `O totem vai imprimir na padrão do Windows: ${padrao.nome}.` : 'Instale o driver e escolha a impressora no painel.'}`);
+      return;
+    }
+    await definirImpressora(nome);
+    if (config.impressora !== nome) {
+      config.impressora = nome;
+      await gravarJson(ARQ_CONFIG, config);
+    }
+    const desligada = lista.find((i) => i.nome === nome).desligada;
+    console.log(`  [impressora] ${nome} definida como padrão do Windows${desligada ? ' — mas ela aparece desligada: confira o cabo e a energia' : ''}.`);
+  } catch (e) {
+    console.log(`  [impressora] não consegui configurar sozinho (${e.message}). Escolha a impressora no painel.`);
+  }
+}
+
+/* ───────────── Impressão direta pelo Windows ─────────────
+ * Caminho principal de impressão: o servidor manda as fotos do pedido para a impressora
+ * pelo próprio Windows (imprimir.ps1), escolhendo a impressora pelo nome e o papel pela
+ * medida. Não depende de impressora padrão nem do navegador. Se algo falhar ANTES de
+ * mandar para a impressora, a tela do totem imprime pelo navegador, como reserva.
+ */
+
+function rodarScript(arquivo, ambiente = {}, tempoMs = 60000) {
+  return new Promise((resolve) => {
+    const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(RAIZ, arquivo)], {
+      env: { ...process.env, ...ambiente },
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let saida = '';
+    const limite = setTimeout(() => p.kill(), tempoMs);
+    p.stdout.on('data', (d) => (saida += d));
+    p.on('error', () => {
+      clearTimeout(limite);
+      resolve('');
+    });
+    p.on('exit', () => {
+      clearTimeout(limite);
+      resolve(saida);
+    });
+  });
+}
+
+/** O script responde uma linha JSON; qualquer outra coisa conta como falha antes de imprimir. */
+function interpretarResposta(saida) {
+  const linhas = String(saida).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  try {
+    const r = JSON.parse(linhas[linhas.length - 1]);
+    if (r && typeof r === 'object' && typeof r.ok === 'boolean') return r;
+  } catch {}
+  return { ok: false, fase: 'preparo', codigo: 'sem-resposta', erro: 'O Windows não respondeu ao pedido de impressão.' };
+}
+
+/** Papel do driver que serve para um tamanho do totem (mesma regra do imprimir.ps1: até 8 mm de folga). */
+function papelPara(formato, papeis) {
+  let melhor = null;
+  let menor = Infinity;
+  for (const p of papeis || []) {
+    const d = Math.max(Math.abs(Math.min(p.largura, p.altura) - formato.largura), Math.abs(Math.max(p.largura, p.altura) - formato.altura));
+    if (d < menor) {
+      menor = d;
+      melhor = p;
+    }
+  }
+  return melhor && menor <= 8 ? melhor : null;
+}
+
+async function papeisDoDriver() {
+  if (!NO_WINDOWS) return null;
+  const r = interpretarResposta(await rodarScript('imprimir.ps1', { TOTEM_IMPRESSORA: config.impressora, TOTEM_SO_PAPEIS: '1' }, 30000));
+  return r.ok && Array.isArray(r.papeis) ? r.papeis : null;
+}
+
+/** Imprime uma lista de arquivos [{arquivo, copias}] num tamanho de papel. */
+async function imprimirDireto(formato, arquivos) {
+  if (!NO_WINDOWS) return { ok: false, fase: 'preparo', codigo: 'sem-windows', erro: 'A impressão direta só existe no Windows.' };
+  const trabalho = path.join(DADOS, `trabalho-${novoId(6)}.json`);
+  await fsp.writeFile(trabalho, JSON.stringify(arquivos));
+  try {
+    const folhas = arquivos.reduce((s, a) => s + a.copias, 0);
+    const saida = await rodarScript(
+      'imprimir.ps1',
+      { TOTEM_IMPRESSORA: config.impressora, TOTEM_LARGURA_MM: String(formato.largura), TOTEM_ALTURA_MM: String(formato.altura), TOTEM_TRABALHO: trabalho, TOTEM_SO_PAPEIS: '' },
+      60000 + folhas * 15000,
+    );
+    return interpretarResposta(saida);
+  } finally {
+    await fsp.rm(trabalho, { force: true });
+  }
+}
+
+/** Manda um pedido inteiro, um trabalho por tamanho de papel. */
+async function imprimirPedido(pedido) {
+  const grupos = new Map();
+  for (const item of pedido.itens.filter((i) => i.recebido)) {
+    const g = grupos.get(item.formato) || { formato: item.formato, nome: item.formatoNome, largura: item.largura, altura: item.altura, arquivos: [] };
+    g.arquivos.push({ arquivo: path.join(dirPedido(pedido.id), item.arquivo), copias: item.copias });
+    grupos.set(item.formato, g);
+  }
+  const resultados = [];
+  for (const g of grupos.values()) {
+    const r = await imprimirDireto(g, g.arquivos);
+    resultados.push({ formato: g.formato, nome: g.nome, ok: r.ok, fase: r.fase || '', codigo: r.codigo || '', erro: r.erro || '', papel: r.papel || '', impressora: r.impressora || '' });
+  }
+  return { ok: resultados.length > 0 && resultados.every((r) => r.ok), grupos: resultados };
+}
+
+/* ───────────── Verificação ("está tudo pronto?") ───────────── */
+
+async function diagnostico() {
+  const itens = [];
+  const item = (titulo, estado, texto, acao = '') => itens.push({ titulo, estado, texto, acao });
+
+  try {
+    const prova = path.join(DADOS, `prova-${novoId(4)}.tmp`);
+    await fsp.writeFile(prova, 'ok');
+    await fsp.rm(prova, { force: true });
+    item('Programa do totem', 'ok', `Funcionando. Os pedidos ficam em ${DIR_PEDIDOS}`);
+  } catch (e) {
+    item('Programa do totem', 'erro', `Não consigo gravar na pasta de dados (${e.message}).`, 'Coloque a pasta do totem em um lugar onde o usuário do Windows possa gravar, como C:\\Totem.');
+  }
+
+  const nav = acharNavegador();
+  if (nav) item('Navegador', 'ok', `${path.basename(nav)} encontrado para abrir a tela cheia.`);
+  else item('Navegador', 'erro', 'Não encontrei o Google Chrome nem o Microsoft Edge.', 'Instale o Google Chrome e abra o totem de novo.');
+
+  if (!NO_WINDOWS) {
+    item('Impressora', 'aviso', 'Este computador não é Windows: o totem imprime pelo navegador, na impressora padrão do sistema.');
+  } else {
+    let lista = null;
+    try {
+      lista = await listarImpressoras();
+    } catch {}
+    const alvo = lista && (lista.find((i) => i.nome === config.impressora) || lista.find((i) => i.padrao));
+    if (!lista) item('Impressora', 'erro', 'O Windows não respondeu à consulta das impressoras.', 'Feche o totem e abra de novo. Se continuar, reinicie o computador.');
+    else if (!lista.length) item('Impressora', 'erro', 'Nenhuma impressora instalada no Windows.', 'Ligue a impressora pelo cabo USB e instale o driver dela.');
+    else if (!alvo) item('Impressora', 'erro', 'Nenhuma impressora escolhida.', 'Na aba Impressora, toque em “Usar esta” na impressora de fotos.');
+    else if (alvo.desligada) item('Impressora', 'erro', `${alvo.nome} aparece desligada ou sem cabo.`, 'Confira a energia e o cabo USB e toque em “Verificar de novo”.');
+    else if (alvo.virtual) item('Impressora', 'aviso', `Em uso: ${alvo.nome}, que não imprime em papel.`, 'Na aba Impressora, toque em “Usar esta” na impressora de fotos.');
+    else item('Impressora', 'ok', `${alvo.nome} instalada e ligada.`);
+
+    if (alvo && !alvo.desligada) {
+      const papeis = await papeisDoDriver();
+      // os produtos com gabarito usam o papel deles (10x15), então entram na mesma conferência
+      const ativos = [...config.formatos.filter((f) => f.ativo), ...config.modelos.filter((m) => m.ativo).map((m) => ({ nome: m.nome, largura: m.papel.largura, altura: m.papel.altura }))];
+      if (!papeis) {
+        item('Papel de cada tamanho', 'aviso', 'Não consegui ler os papéis do driver. O totem vai imprimir pelo navegador, no papel definido nas preferências do driver.', 'Imprima a página de teste para conferir.');
+      } else {
+        const certos = [];
+        const semPapel = [];
+        for (const f of ativos) {
+          const p = papelPara(f, papeis);
+          if (p) certos.push(`${f.nome} → “${p.nome}”`);
+          else semPapel.push(f.nome);
+        }
+        if (!semPapel.length) item('Papel de cada tamanho', 'ok', `O driver tem papel para todos os tamanhos ativos: ${certos.join(', ')}.`);
+        else if (certos.length) item('Papel de cada tamanho', 'aviso', `Com papel no driver: ${certos.join(', ')}. Sem papel no driver: ${semPapel.join(', ')}.`, `Em Configurações, desative ${semPapel.join(', ')} — ou confira as medidas desses tamanhos.`);
+        else item('Papel de cada tamanho', 'erro', `O driver não tem papel para nenhum tamanho ativo (${semPapel.join(', ')}).`, 'Confira as medidas dos tamanhos em Configurações e o papel nas preferências do driver.');
+      }
+    }
+  }
+
+  const t = estadoTunel();
+  if (config.enderecoPublico) item('Fotos pelo 4G/5G', 'ok', `O QR Code usa o endereço fixo ${config.enderecoPublico}.`);
+  else if (!config.internet) item('Fotos pelo 4G/5G', 'aviso', 'Desligado: o celular do cliente precisa estar no Wi-Fi da loja.', 'Ligue em Configurações → Receber fotos.');
+  else if (t.estado === 'ativo') item('Fotos pelo 4G/5G', 'ok', `Funcionando e testado: ${t.url}`);
+  else if (t.estado === 'erro') item('Fotos pelo 4G/5G', 'erro', `Sem conexão: ${t.erro}.`, 'Confira a internet do computador. O totem tenta de novo sozinho; enquanto isso o QR usa o Wi-Fi da loja.');
+  else item('Fotos pelo 4G/5G', 'aviso', 'Conectando… toque em “Verificar de novo” em alguns segundos.');
+
+  const rede = enderecos();
+  if (rede.length) item('Rede da loja (reserva)', 'ok', `${rede[0].url} — usada se a internet cair; o celular precisa estar no mesmo Wi-Fi.`);
+  else item('Rede da loja (reserva)', 'aviso', 'O computador não está em nenhuma rede local.', 'Sem internet e sem rede, só o pendrive funciona.');
+
+  return { pronto: !itens.some((i) => i.estado === 'erro'), itens };
+}
+
+/* ───────────── Túnel para a internet (fotos pelo 4G/5G) ─────────────
+ * O totem abre um "quick tunnel" da Cloudflare (gratuito, sem conta): um endereço
+ * https://….trycloudflare.com que leva só até a porta PORTA_INTERNET deste computador.
+ * O QR Code passa a apontar para ele, então o cliente não precisa do Wi-Fi da loja.
+ * As fotos atravessam o túnel criptografadas e não ficam guardadas na internet.
+ */
+
+const URL_TUNEL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+const tunel = { estado: 'desligado', url: '', erro: '', proc: null, ocupado: false, tentativas: 0, falhas: 0, religar: null, vigia: null };
+
+const estadoTunel = () => ({ estado: tunel.estado, url: tunel.url, erro: tunel.erro });
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function caminhoCloudflared() {
+  if (process.env.TOTEM_CLOUDFLARED) return process.env.TOTEM_CLOUDFLARED;
+  const nome = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const local = path.join(RAIZ, 'runtime', nome);
+  if (fs.existsSync(local)) return local;
+  return process.platform === 'win32' ? null : nome; // fora do Windows, usa o que estiver instalado
+}
+
+/** No Windows, baixa o cloudflared oficial para a pasta runtime (só na primeira vez). */
+function baixarCloudflared() {
+  return new Promise((resolve, reject) => {
+    const p = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(RAIZ, 'instalar-tunel.ps1')], { stdio: 'ignore', windowsHide: true });
+    p.on('error', reject);
+    p.on('exit', (codigo) => (codigo === 0 ? resolve() : reject(new Error('não consegui baixar o programa do túnel (sem internet?)'))));
+  });
+}
+
+/** O endereço público já chega até este totem? */
+async function tunelResponde(url) {
+  if (process.env.TOTEM_TUNEL_PING === '0') return true;
+  try {
+    const r = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(8000) });
+    return r.ok && (await r.json()).totem === true;
+  } catch {
+    return false;
+  }
+}
+
+function falhaTunel(mensagem) {
+  tunel.estado = 'erro';
+  tunel.url = '';
+  tunel.erro = mensagem;
+  if (tunel.tentativas === 0) console.log(`  [internet] ${mensagem} — o QR usa o Wi-Fi da loja enquanto isso.`);
+  if (!config.internet) return;
+  const espera = Math.min(120, 5 * 2 ** Math.min(tunel.tentativas++, 5)) * 1000;
+  clearTimeout(tunel.religar);
+  tunel.religar = setTimeout(iniciarTunel, espera);
+  tunel.religar.unref();
+}
+
+async function iniciarTunel() {
+  if (!config.internet || tunel.proc || tunel.ocupado) return;
+  tunel.ocupado = true;
+  clearTimeout(tunel.religar);
+  try {
+    let exe = caminhoCloudflared();
+    if (!exe) {
+      tunel.estado = 'baixando';
+      console.log('  [internet] baixando o programa do túnel (só na primeira vez)...');
+      await baixarCloudflared();
+      exe = caminhoCloudflared();
+      if (!exe) throw new Error('o programa do túnel não foi instalado');
+    }
+    if (!config.internet) return;
+    tunel.estado = 'conectando';
+    tunel.erro = '';
+    const p = spawn(exe, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${PORTA_INTERNET}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    tunel.proc = p;
+    let saida = '';
+    let achou = false;
+    const ler = (parte) => {
+      if (achou) return;
+      saida = (saida + parte).slice(-8000);
+      const m = URL_TUNEL.exec(saida);
+      if (!m) return;
+      achou = true;
+      confirmarTunel(p, m[0]);
+    };
+    p.stdout.on('data', ler);
+    p.stderr.on('data', ler);
+    p.on('error', (e) => {
+      if (tunel.proc === p) tunel.proc = null;
+      falhaTunel(e.code === 'ENOENT' ? 'programa do túnel (cloudflared) não encontrado' : `túnel não abriu: ${e.message}`);
+    });
+    p.on('exit', () => {
+      if (tunel.proc !== p) return;
+      tunel.proc = null;
+      clearInterval(tunel.vigia);
+      if (config.internet) falhaTunel('a conexão com a internet caiu');
+    });
+  } catch (e) {
+    falhaTunel(e.message);
+  } finally {
+    tunel.ocupado = false;
+  }
+}
+
+/** Só troca o QR para o endereço da internet depois de ver que ele realmente responde. */
+async function confirmarTunel(p, url) {
+  for (let i = 0; i < 20 && tunel.proc === p; i++) {
+    if (await tunelResponde(url)) {
+      if (tunel.proc !== p) return;
+      tunel.url = url;
+      tunel.estado = 'ativo';
+      tunel.erro = '';
+      tunel.tentativas = 0;
+      tunel.falhas = 0;
+      console.log(`  [internet] pronto: ${url} — o cliente envia pelo 4G/5G, sem o Wi-Fi da loja.`);
+      clearInterval(tunel.vigia);
+      tunel.vigia = setInterval(() => vigiarTunel(p), 90 * 1000);
+      tunel.vigia.unref();
+      return;
+    }
+    await dormir(2000);
+  }
+  if (tunel.proc === p) p.kill(); // não respondeu: o 'exit' agenda uma nova tentativa
+}
+
+/** Confere de tempos em tempos; três falhas seguidas e o túnel é refeito (com endereço novo). */
+async function vigiarTunel(p) {
+  if (tunel.proc !== p || tunel.estado !== 'ativo') return;
+  if (await tunelResponde(tunel.url)) {
+    tunel.falhas = 0;
+    return;
+  }
+  if (++tunel.falhas >= 3 && tunel.proc === p) p.kill();
+}
+
+function pararTunel() {
+  clearTimeout(tunel.religar);
+  clearInterval(tunel.vigia);
+  const p = tunel.proc;
+  tunel.proc = null;
+  tunel.estado = 'desligado';
+  tunel.url = '';
+  tunel.erro = '';
+  tunel.tentativas = 0;
+  if (p) {
+    try {
+      p.kill();
+    } catch {}
+  }
+}
+
+/* ───────────── HTTP ───────────── */
+
+const TIPOS = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+};
+const PAGINAS = { '/': 'index.html', '/enviar': 'enviar.html', '/admin': 'admin.html' };
+const SEGURANCA = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+};
+
+function json(res, status, corpo) {
+  const dados = Buffer.from(JSON.stringify(corpo));
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': dados.length, 'Cache-Control': 'no-store', ...SEGURANCA });
+  res.end(dados);
+}
+
+async function enviarArquivo(req, res, arquivo, tipo, cache = 'no-cache') {
+  let info;
+  try {
+    info = await fsp.stat(arquivo);
+    if (!info.isFile()) throw new Error('não é arquivo');
+  } catch {
+    throw erro(404, 'Não encontrado.');
+  }
+  res.writeHead(200, { 'Content-Type': tipo, 'Content-Length': info.size, 'Cache-Control': cache, ...SEGURANCA });
+  if (req.method === 'HEAD') return res.end();
+  fs.createReadStream(arquivo).on('error', () => res.destroy()).pipe(res);
+}
+
+async function estatico(req, res, caminho) {
+  const rel = PAGINAS[caminho] || caminho.replace(/^\/+/, '');
+  const arquivo = path.resolve(PUBLICO, rel);
+  if (arquivo !== PUBLICO && !arquivo.startsWith(PUBLICO + path.sep)) throw erro(404, 'Não encontrado.');
+  const tipo = TIPOS[path.extname(arquivo).toLowerCase()];
+  if (!tipo) throw erro(404, 'Não encontrado.');
+  await enviarArquivo(req, res, arquivo, tipo);
+}
+
+/**
+ * Rotas da API. Cada entrada: [método, regex, função(req, res, parâmetros, url), pública?].
+ * Só as rotas marcadas como públicas respondem pela porta do túnel (internet): são as que
+ * a página do celular usa. Todo o resto exige a tela do totem ou o PIN do painel.
+ */
+const PUBLICA = true;
+const rotas = [
+  ['GET', /^\/api\/config$/, async (req, res) => {
+    exigirLocal(req); // traz a senha do Wi-Fi da loja: só a tela do totem pode ler
+    json(res, 200, configPublica());
+  }],
+  ['GET', /^\/api\/ping$/, async (req, res) => json(res, 200, { totem: true }), PUBLICA],
+
+  /* — sessão: criada pelo totem, alimentada pelo celular — */
+  ['POST', /^\/api\/sessoes$/, async (req, res) => {
+    exigirLocal(req);
+    const id = novoId();
+    await fsp.mkdir(dirSessao(id), { recursive: true });
+    sessoes.set(id, { id, criada: Date.now(), vista: Date.now(), conectado: false, enviando: 0, fotos: [] });
+    json(res, 201, { id, urlEnvio: urlEnvio(id), viaInternet: viaInternet() });
+  }],
+  ['GET', /^\/api\/sessoes\/([a-f0-9]{24})$/, async (req, res, [id]) => {
+    exigirLocal(req);
+    const s = pegarSessao(id);
+    json(res, 200, {
+      urlEnvio: urlEnvio(id), // muda sozinho quando o túnel conecta ou cai
+      viaInternet: viaInternet(),
+      conectado: s.conectado,
+      pendentes: s.enviando + s.fotos.filter((f) => !f.pronta).length,
+      fotos: s.fotos.filter((f) => f.pronta).map(({ id: fid, nome, w, h }) => ({ id: fid, nome, w, h })),
+    });
+  }],
+  ['DELETE', /^\/api\/sessoes\/([a-f0-9]{24})$/, async (req, res, [id]) => {
+    exigirLocal(req);
+    await apagarSessao(id);
+    json(res, 200, { ok: true });
+  }],
+  ['GET', /^\/api\/sessoes\/([a-f0-9]{24})\/info$/, async (req, res, [id]) => {
+    const s = pegarSessao(id);
+    s.conectado = true;
+    json(res, 200, { loja: config.loja, maxFotos: config.maxFotos, restantes: Math.max(0, config.maxFotos - s.fotos.length) });
+  }, PUBLICA],
+  ['POST', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos$/, async (req, res, [id], url) => {
+    const s = pegarSessao(id);
+    if (s.fotos.length + s.enviando >= config.maxFotos) {
+      req.resume();
+      throw erro(409, `O limite é de ${config.maxFotos} fotos por pedido.`);
+    }
+    const fid = novoId(8);
+    s.enviando++;
+    try {
+      const { ext } = await receberImagem(req, path.join(dirSessao(id), fid), MAX_FOTO);
+      if (!sessoes.has(id)) throw erro(404, 'Esta sessão terminou.');
+      s.fotos.push({
+        id: fid,
+        ext,
+        nome: texto(url.searchParams.get('nome'), 120) || 'foto',
+        w: inteiro(url.searchParams.get('w'), 1, 60000, 0),
+        h: inteiro(url.searchParams.get('h'), 1, 60000, 0),
+        pronta: false,
+      });
+      s.vista = Date.now();
+      json(res, 201, { id: fid });
+    } finally {
+      s.enviando--;
+    }
+  }, PUBLICA],
+  ['POST', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos\/([a-f0-9]{16})\/mini$/, async (req, res, [id, fid]) => {
+    const s = pegarSessao(id);
+    const f = s.fotos.find((x) => x.id === fid);
+    if (!f) {
+      req.resume();
+      throw erro(404, 'Foto não encontrada.');
+    }
+    await receberImagem(req, path.join(dirSessao(id), `${fid}_mini`), MAX_MINI, ['jpg']);
+    f.pronta = true;
+    json(res, 200, { ok: true });
+  }, PUBLICA],
+  ['GET', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos\/([a-f0-9]{16})(\/mini)?$/, async (req, res, [id, fid, mini]) => {
+    exigirLocal(req);
+    const f = pegarSessao(id).fotos.find((x) => x.id === fid);
+    if (!f) throw erro(404, 'Foto não encontrada.');
+    const arq = mini ? `${fid}_mini.jpg` : `${fid}.${f.ext}`;
+    await enviarArquivo(req, res, path.join(dirSessao(id), arq), mini ? MIME.jpg : MIME[f.ext], 'private, max-age=3600');
+  }],
+  ['DELETE', /^\/api\/sessoes\/([a-f0-9]{24})\/fotos\/([a-f0-9]{16})$/, async (req, res, [id, fid]) => {
+    exigirLocal(req);
+    const s = pegarSessao(id);
+    const f = s.fotos.find((x) => x.id === fid);
+    if (f) {
+      s.fotos = s.fotos.filter((x) => x !== f);
+      await fsp.rm(path.join(dirSessao(id), `${fid}.${f.ext}`), { force: true });
+      await fsp.rm(path.join(dirSessao(id), `${fid}_mini.jpg`), { force: true });
+    }
+    json(res, 200, { ok: true });
+  }],
+
+  /* — pedido: o totem manda as fotos já recortadas no tamanho de impressão — */
+  ['POST', /^\/api\/pedidos$/, async (req, res) => {
+    exigirLocal(req);
+    const p = await criarPedido(await lerJsonCorpo(req));
+    json(res, 201, { id: p.id, numero: p.numero, total: p.total });
+  }],
+  ['PUT', /^\/api\/pedidos\/([\d_-]+)\/itens\/(\d{1,3})$/, async (req, res, [id, n]) => {
+    exigirLocal(req);
+    const p = await lerPedido(id).catch((e) => {
+      req.resume();
+      throw e;
+    });
+    const item = p.itens.find((i) => i.n === Number(n));
+    if (!item) {
+      req.resume();
+      throw erro(404, 'Item não encontrado.');
+    }
+    const semExt = path.join(dirPedido(id), item.arquivo.replace(/\.jpg$/, ''));
+    await receberImagem(req, semExt, MAX_FOTO, ['jpg']);
+    // relê: outros itens podem ter sido gravados enquanto este chegava
+    const atual = await lerPedido(id);
+    atual.itens.find((i) => i.n === item.n).recebido = true;
+    await gravarPedido(atual);
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/pedidos\/([\d_-]+)\/concluir$/, async (req, res, [id]) => {
+    exigirLocal(req);
+    const corpo = await lerJsonCorpo(req);
+    const p = await lerPedido(id);
+    p.status = corpo.impresso === true ? 'impresso' : 'salvo';
+    p.via = ['windows', 'navegador', 'misto'].includes(corpo.via) ? corpo.via : '';
+    p.concluido = new Date().toISOString();
+    await gravarPedido(p);
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/pedidos\/([\d_-]+)\/imprimir$/, async (req, res, [id]) => {
+    exigirLocal(req);
+    json(res, 200, await imprimirPedido(await lerPedido(id)));
+  }],
+
+  /* — painel do lojista — */
+  ['POST', /^\/api\/admin\/entrar$/, async (req, res) => {
+    if (!ADMIN_REMOTO && !ehLocal(req)) throw erro(403, 'O painel só abre no próprio totem.');
+    if (Date.now() < bloqueadoAte) throw erro(429, 'Muitas tentativas. Aguarde um minuto.');
+    const { pin } = await lerJsonCorpo(req);
+    if (!pinConfere(pin)) {
+      if (++errosPin >= 5) {
+        errosPin = 0;
+        bloqueadoAte = Date.now() + 60000;
+      }
+      throw erro(401, 'PIN incorreto.');
+    }
+    errosPin = 0;
+    const token = novoId(24);
+    tokensAdmin.set(token, Date.now() + 30 * 60 * 1000);
+    json(res, 200, { token });
+  }],
+  ['GET', /^\/api\/admin\/config$/, async (req, res) => {
+    exigirAdmin(req);
+    const { pin, ...resto } = config;
+    json(res, 200, { config: resto, pinPadrao: !pin, enderecos: enderecos(), porta: PORTA, portaInternet: PORTA_INTERNET, urlBase: urlBase(), tunel: estadoTunel(), pastaPedidos: DIR_PEDIDOS, plataforma: process.platform });
+  }],
+  ['PUT', /^\/api\/admin\/config$/, async (req, res) => {
+    exigirAdmin(req);
+    config = limparConfig(await lerJsonCorpo(req), config);
+    await gravarJson(ARQ_CONFIG, config);
+    if (config.internet) iniciarTunel();
+    else pararTunel();
+    const { pin, ...resto } = config;
+    json(res, 200, { config: resto, urlBase: urlBase(), tunel: estadoTunel() });
+  }],
+  ['POST', /^\/api\/admin\/pin$/, async (req, res) => {
+    exigirAdmin(req);
+    const { novo } = await lerJsonCorpo(req);
+    if (typeof novo !== 'string' || !/^\d{4,8}$/.test(novo)) throw erro(400, 'O PIN deve ter de 4 a 8 números.');
+    const sal = novoId(8);
+    config.pin = { sal, hash: hashPin(novo, sal) };
+    await gravarJson(ARQ_CONFIG, config);
+    json(res, 200, { ok: true });
+  }],
+  ['GET', /^\/api\/admin\/pedidos$/, async (req, res) => {
+    exigirAdmin(req);
+    json(res, 200, { pedidos: await listarPedidos() });
+  }],
+  ['GET', /^\/api\/admin\/pedidos\/([\d_-]+)\/itens\/(\d{1,3})$/, async (req, res, [id, n]) => {
+    exigirAdmin(req);
+    const p = await lerPedido(id);
+    const item = p.itens.find((i) => i.n === Number(n));
+    if (!item) throw erro(404, 'Item não encontrado.');
+    await enviarArquivo(req, res, path.join(dirPedido(id), item.arquivo), MIME.jpg, 'no-store');
+  }],
+  ['DELETE', /^\/api\/admin\/pedidos\/([\d_-]+)$/, async (req, res, [id]) => {
+    exigirAdmin(req);
+    await fsp.rm(dirPedido(id), { recursive: true, force: true });
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/admin\/pasta$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    const { pedido } = await lerJsonCorpo(req);
+    const alvo = pedido ? dirPedido(String(pedido)) : DIR_PEDIDOS;
+    await fsp.mkdir(alvo, { recursive: true });
+    abrirNoSistema(alvo);
+    json(res, 200, { ok: true });
+  }],
+  ['GET', /^\/api\/admin\/diagnostico$/, async (req, res) => {
+    exigirAdmin(req);
+    json(res, 200, await diagnostico());
+  }],
+  ['POST', /^\/api\/admin\/teste-impressao$/, async (req, res, _p, url) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    const f = config.formatos.find((x) => x.id === url.searchParams.get('formato'));
+    if (!f) {
+      req.resume();
+      throw erro(400, 'Tamanho desconhecido.');
+    }
+    const semExt = path.join(DADOS, `teste-${novoId(6)}`);
+    await receberImagem(req, semExt, MAX_FOTO, ['jpg']);
+    try {
+      json(res, 200, await imprimirDireto(f, [{ arquivo: `${semExt}.jpg`, copias: 1 }]));
+    } finally {
+      await fsp.rm(`${semExt}.jpg`, { force: true });
+    }
+  }],
+  ['GET', /^\/api\/admin\/impressoras$/, async (req, res) => {
+    exigirAdmin(req);
+    json(res, 200, { windows: NO_WINDOWS, escolhida: config.impressora, impressoras: await listarImpressoras() });
+  }],
+  ['POST', /^\/api\/admin\/impressora$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    if (!NO_WINDOWS) throw erro(400, 'A escolha da impressora pelo painel só funciona no Windows.');
+    const { nome } = await lerJsonCorpo(req);
+    const lista = await listarImpressoras();
+    const alvo = lista.find((i) => i.nome === nome);
+    if (!alvo) throw erro(404, 'Não encontrei esta impressora no Windows.');
+    await definirImpressora(alvo.nome);
+    config.impressora = alvo.nome;
+    await gravarJson(ARQ_CONFIG, config);
+    json(res, 200, { windows: true, escolhida: config.impressora, impressoras: await listarImpressoras() });
+  }],
+  ['POST', /^\/api\/admin\/impressora\/preferencias$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    if (!NO_WINDOWS) throw erro(400, 'Só funciona no Windows.');
+    const alvo = (await listarImpressoras()).find((i) => i.nome === config.impressora || (!config.impressora && i.padrao));
+    if (!alvo) throw erro(404, 'Escolha a impressora primeiro.');
+    // abre a janela "Preferências de impressão" do driver (papel, sem margem...)
+    const p = spawn('rundll32', ['printui.dll,PrintUIEntry', '/e', '/n', alvo.nome], { stdio: 'ignore', detached: true });
+    p.on('error', () => {});
+    p.unref();
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/admin\/teclado$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    if (process.platform !== 'win32') throw erro(400, 'O teclado na tela só existe no Windows.');
+    const p = spawn('cmd', ['/c', 'start', '', 'osk.exe'], { stdio: 'ignore', detached: true });
+    p.on('error', () => {});
+    p.unref();
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/admin\/encerrar$/, async (req, res) => {
+    exigirAdmin(req);
+    exigirLocal(req);
+    json(res, 200, { ok: true });
+    console.log('\nTotem encerrado pelo painel.');
+    setTimeout(() => {
+      pararTunel();
+      fecharNavegador();
+      setTimeout(() => process.exit(0), 400);
+    }, 200);
+  }],
+];
+
+async function atender(req, res) {
+  const url = new URL(req.url, 'http://totem');
+  let caminho;
+  try {
+    caminho = decodeURIComponent(url.pathname);
+  } catch {
+    throw erro(400, 'Endereço inválido.');
+  }
+  const externo = ehExterno(req);
+  if (caminho.startsWith('/api/')) {
+    for (const [metodo, re, fn, publica] of rotas) {
+      if (req.method !== metodo) continue;
+      const m = re.exec(caminho);
+      if (!m) continue;
+      if (externo && !publica) break;
+      return fn(req, res, m.slice(1), url);
+    }
+    throw erro(404, 'Não encontrado.');
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') throw erro(405, 'Método não permitido.');
+  if (externo && !ESTATICO_EXTERNO.test(caminho)) throw erro(404, 'Não encontrado.');
+  return estatico(req, res, caminho);
+}
+
+/** O que a página do celular carrega: ela mesma e seus estilos, scripts, fontes e logo. */
+const ESTATICO_EXTERNO = /^\/(enviar|(css|js|fonts|img)\/[\w.-]+)$/;
+
+function aoPedir(req, res) {
+  atender(req, res).catch((e) => {
+    const status = e.status || 500;
+    if (status >= 500) console.error(`[erro] ${req.method} ${req.url}: ${e.stack || e.message}`);
+    if (res.headersSent) return res.destroy();
+    req.resume(); // descarta o que ainda estiver chegando (um envio recusado, por exemplo)
+    json(res, status, { erro: status >= 500 ? 'Algo deu errado no totem. Chame um atendente.' : e.message });
+  });
+}
+const servidor = http.createServer(aoPedir); // tela do totem e rede local
+const servidorInternet = http.createServer(aoPedir); // só o túnel (127.0.0.1)
+servidor.requestTimeout = servidorInternet.requestTimeout = 10 * 60 * 1000; // fotos grandes em conexão lenta
+
+async function iniciar() {
+  await fsp.mkdir(DIR_PEDIDOS, { recursive: true });
+  // fotos de sessões antigas nunca sobrevivem a uma reinicialização
+  await fsp.rm(DIR_SESSOES, { recursive: true, force: true });
+  await fsp.mkdir(DIR_SESSOES, { recursive: true });
+  const salvo = await lerJson(ARQ_CONFIG, null);
+  config = limparConfig(salvo, structuredClone(PADRAO));
+  if (salvo && salvo.pin && typeof salvo.pin.sal === 'string' && typeof salvo.pin.hash === 'string') config.pin = { sal: salvo.pin.sal, hash: salvo.pin.hash };
+  const est = await lerJson(ARQ_ESTADO, null);
+  if (est && Number.isInteger(est.proximoNumero) && est.proximoNumero > 0) estado = { proximoNumero: est.proximoNumero };
+  await limpar().catch(() => {});
+  setInterval(() => limpar().catch(() => {}), 30 * 60 * 1000).unref();
+
+  const modo = ARGS.has('--totem') ? 'totem' : ARGS.has('--teste') ? 'teste' : null;
+  servidor.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.log(`\nA porta ${PORTA} já está em uso — o totem provavelmente já está aberto.`);
+      if (modo) abrirNavegador(modo);
+      else process.exitCode = 1;
+      return;
+    }
+    console.error(e);
+    process.exit(1);
+  });
+  servidor.listen(PORTA, '0.0.0.0', () => {
+    const e = enderecos();
+    console.log('\n  Amor por Fotos — Totem de revelação');
+    console.log('  ───────────────────────────────────');
+    console.log(`  Tela do totem:   http://localhost:${PORTA}/`);
+    console.log(`  Painel (PIN):    http://localhost:${PORTA}/admin`);
+    if (config.enderecoPublico) console.log(`  QR do celular:   ${config.enderecoPublico}`);
+    else if (config.internet) console.log('  QR do celular:   pela internet (4G/5G) — conectando o túnel...');
+    else if (e.length) console.log(`  QR do celular:   ${e[0].url}  (${e[0].nome}, mesmo Wi-Fi)`);
+    else console.log('  QR do celular:   sem rede — conecte o totem à internet ou ao Wi-Fi');
+    console.log(`  Pedidos salvos:  ${DIR_PEDIDOS}`);
+    if (!config.pin) console.log('  PIN do painel:   1234 (troque no painel)');
+    console.log('\n  Deixe esta janela aberta. Para encerrar: feche-a ou use o painel.\n');
+    if (modo) abrirNavegador(modo);
+  });
+  servidorInternet.on('error', (e) => console.log(`[aviso] porta ${PORTA_INTERNET} (internet) indisponível: ${e.message}`));
+  servidorInternet.listen(PORTA_INTERNET, '127.0.0.1', () => {
+    if (config.internet) iniciarTunel();
+  });
+  prepararImpressora();
+}
+
+function encerrar() {
+  pararTunel();
+  fecharNavegador();
+  process.exit(0);
+}
+process.on('SIGINT', encerrar);
+process.on('SIGTERM', encerrar);
+
+if (require.main === module) iniciar();
+
+module.exports = { limparConfig, PADRAO, tipoImagem, argsNavegador, URL_TUNEL, interpretarImpressoras, impressoraAutomatica, papelPara, interpretarResposta };

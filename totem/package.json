@@ -1,0 +1,17 @@
+{
+  "name": "totem-amor-por-fotos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Totem de revelação de fotos (tela touch) — servidor local sem dependências",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "totem": "node server.js --totem",
+    "teste": "node server.js --teste",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

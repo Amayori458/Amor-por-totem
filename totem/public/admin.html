@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel — Amor por Fotos</title>
+<link rel="icon" href="/img/logo.png">
+<link rel="stylesheet" href="/css/fontes.css">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/componentes.css">
+<link rel="stylesheet" href="/css/totem.css">
+<link rel="stylesheet" href="/css/admin.css">
+<link rel="stylesheet" href="/css/impressao.css">
+</head>
+<body class="totem painel">
+
+<div id="app">
+  <!-- PIN -->
+  <section class="tela centro ativa" id="tela-pin">
+    <div class="centro-caixa pin">
+      <h1 class="t-title">Painel do lojista</h1>
+      <p class="t-lead" id="pin-texto">Digite o PIN.</p>
+      <div class="pin-pontos" id="pin-pontos" aria-live="polite"></div>
+      <div class="pin-teclas" id="pin-teclas"></div>
+      <a class="af-btn" href="/"><span data-icone="voltar"></span><span>Voltar ao totem</span></a>
+    </div>
+  </section>
+
+  <!-- Painel -->
+  <section class="tela" id="tela-painel">
+    <header class="topo painel-topo">
+      <h1 class="t-heading">Painel</h1>
+      <nav class="chips abas" id="abas">
+        <button class="af-chip" type="button" data-aba="pedidos" aria-pressed="true">Pedidos</button>
+        <button class="af-chip" type="button" data-aba="config" aria-pressed="false">Configurações</button>
+        <button class="af-chip" type="button" data-aba="impressora" aria-pressed="false">Impressora</button>
+        <button class="af-chip" type="button" data-aba="verificacao" aria-pressed="false">Verificação</button>
+      </nav>
+      <div class="chips">
+        <button class="af-btn" type="button" id="teclado" hidden><span data-icone="teclado"></span><span>Teclado</span></button>
+        <button class="af-btn" type="button" id="encerrar">Fechar totem</button>
+        <a class="af-btn af-btn-primary" href="/"><span data-icone="voltar"></span><span>Voltar ao totem</span></a>
+      </div>
+    </header>
+    <p class="faixa" id="faixa-pin" hidden>O PIN ainda é o padrão (1234). Troque em Configurações → Segurança.</p>
+
+    <div class="aba" data-aba="pedidos">
+      <div class="indicadores" id="indicadores"></div>
+      <div class="aba-topo">
+        <h2 class="t-heading">Últimos pedidos</h2>
+        <div class="chips">
+          <button class="af-btn" type="button" id="atualizar">Atualizar</button>
+          <button class="af-btn" type="button" id="pasta"><span data-icone="pasta"></span><span>Abrir pasta dos pedidos</span></button>
+        </div>
+      </div>
+      <div class="tabela-rolagem"><table class="tabela" id="tabela-pedidos"></table></div>
+    </div>
+
+    <div class="aba" data-aba="config" hidden>
+      <form id="form" autocomplete="off"></form>
+      <footer class="barra">
+        <p class="barra-info" id="salvo"></p>
+        <button class="af-btn af-btn-primary btn-lg" type="button" id="salvar">Salvar configurações</button>
+      </footer>
+    </div>
+
+    <div class="aba" data-aba="verificacao" hidden>
+      <div class="cartoes-ajuda">
+        <article class="ajuda largo">
+          <h2 class="t-heading">Está tudo pronto?</h2>
+          <p class="ver-resumo" id="ver-resumo">Verificando…</p>
+          <ul class="ver-lista" id="ver-lista"></ul>
+          <div class="chips"><button class="af-btn af-btn-primary" type="button" id="ver-de-novo">Verificar de novo</button></div>
+        </article>
+      </div>
+    </div>
+
+    <div class="aba" data-aba="impressora" hidden>
+      <div class="cartoes-ajuda">
+        <article class="ajuda largo">
+          <h2 class="t-heading">Impressora do totem</h2>
+          <p id="imp-resumo">Procurando as impressoras instaladas…</p>
+          <ul class="impressoras" id="imp-lista"></ul>
+          <div class="chips">
+            <button class="af-btn" type="button" id="imp-atualizar">Atualizar lista</button>
+            <button class="af-btn" type="button" id="imp-preferencias">Papel e margens (preferências do driver)</button>
+          </div>
+        </article>
+        <article class="ajuda">
+          <h2 class="t-heading">Página de teste</h2>
+          <p>Imprime uma folha com moldura e régua para conferir se o papel e as margens estão certos.</p>
+          <div class="chips" id="teste-tamanhos"></div>
+          <button class="af-btn af-btn-primary btn-lg" type="button" id="teste"><span data-icone="impressora"></span><span>Imprimir teste</span></button>
+        </article>
+        <article class="ajuda">
+          <h2 class="t-heading">Como o totem imprime</h2>
+          <ol class="lista-num">
+            <li>O totem manda cada foto, já recortada no tamanho certo, direto para a impressora escolhida acima, no papel do driver que tem aquela medida. Se isso não estiver disponível, imprime pelo navegador na <strong>impressora padrão do Windows</strong>.</li>
+            <li>Ao abrir, o totem procura a ASK-400 e a define como padrão sozinho. Se ela não aparecer marcada acima, toque em <strong>Usar esta</strong>.</li>
+            <li>Em <strong>Papel e margens</strong>, escolha o papel carregado (por exemplo 10x15 / 4x6) e impressão <strong>sem margem</strong>.</li>
+            <li>Em Configurações, desative os tamanhos que o papel carregado não consegue fazer.</li>
+          </ol>
+          <p class="pequeno">Aberto pelo “Iniciar-Totem”, o navegador imprime sem mostrar diálogo. Pelo “Iniciar-Teste”, o diálogo aparece para você conferir.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="modais"></div>
+<div id="impressao"></div>
+<script type="module" src="/js/admin.js"></script>
+</body>
+</html>
